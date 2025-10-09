@@ -223,12 +223,11 @@ func setupTestServer() (*gin.Engine, *ServerContext) {
 	// Add the test certificate to the CertPool for x5c validation
 	certPool := x509.NewCertPool()
 	certPool.AddCert(testCert)
-	serverCtx := &ServerContext{
-		PipelineContext: &pipeline.Context{
-			CertPool: certPool,
-		},
-		LastProcessed: time.Now(),
+	serverCtx := NewServerContext(nil)
+	serverCtx.PipelineContext = &pipeline.Context{
+		CertPool: certPool,
 	}
+	serverCtx.LastProcessed = time.Now()
 	// Store the certBase64 for use in tests
 	RegisterAPIRoutes(r, serverCtx)
 	return r, serverCtx
@@ -393,7 +392,7 @@ func TestStartBackgroundUpdater(t *testing.T) {
 	})
 	pipes := []pipeline.Pipe{{MethodName: "mockstep", MethodArguments: []string{}}}
 	pl := &pipeline.Pipeline{Pipes: pipes}
-	serverCtx := &ServerContext{}
+	serverCtx := NewServerContext(nil)
 	interval := 10 * time.Millisecond
 	_ = StartBackgroundUpdater(pl, serverCtx, interval)
 
