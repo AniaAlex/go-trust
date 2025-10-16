@@ -3,6 +3,7 @@ package pipeline
 import (
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -274,7 +275,12 @@ func addProviderCertificates(providerDir string, provider *etsi119612.TSPType) e
 		}
 
 		// Try to parse the certificate to ensure it's valid
-		_, err = x509.ParseCertificate(certBytes)
+		// First decode PEM format
+		block, _ := pem.Decode(certBytes)
+		if block == nil {
+			return fmt.Errorf("failed to decode PEM block from %s", certPath)
+		}
+		_, err = x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			return fmt.Errorf("failed to decode invalid certificate data in %s: %w", certPath, err)
 		}
@@ -294,10 +300,10 @@ func addProviderCertificates(providerDir string, provider *etsi119612.TSPType) e
 			}
 		}
 
-		// Create digital IDs - certificate bytes have been validated above
+		// Create digital IDs - use DER bytes from PEM block, not full PEM content
 		digitalIds := []*etsi119612.DigitalIdentityType{
 			{
-				X509Certificate: base64.StdEncoding.EncodeToString(certBytes),
+				X509Certificate: base64.StdEncoding.EncodeToString(block.Bytes),
 			},
 		}
 
@@ -544,10 +550,10 @@ func GenerateTSL(pl *Pipeline, ctx *Context, args ...string) (*Context, error) {
 //   - pl: Pipeline instance managing the step execution
 //   - ctx: Pipeline context containing state information
 //   - args: String slice where:
-//     - args[0] must be the URL or file path to the TSL
-//     - args[1:] can contain optional parameters in the format "key:value", such as:
-//       - user-agent:MyCustomUserAgent/1.0
-//       - timeout:30s (any valid Go duration string)
+//   - args[0] must be the URL or file path to the TSL
+//   - args[1:] can contain optional parameters in the format "key:value", such as:
+//   - user-agent:MyCustomUserAgent/1.0
+//   - timeout:30s (any valid Go duration string)
 //
 // Returns:
 //   - *Context: Updated context with the loaded TSL added to ctx.TSLs
@@ -564,9 +570,9 @@ func GenerateTSL(pl *Pipeline, ctx *Context, args ...string) (*Context, error) {
 //
 // Example usage in pipeline configuration:
 //   - load:
-//     - http://example.com/tsl.xml  # Load from URL
-//     - user-agent:MyCustomUserAgent/1.0
-//     - timeout:30s
+//   - http://example.com/tsl.xml  # Load from URL
+//   - user-agent:MyCustomUserAgent/1.0
+//   - timeout:30s
 //   - load:/path/to/local/tsl.xml     # Load from local file
 func LoadTSL(pl *Pipeline, ctx *Context, args ...string) (*Context, error) {
 	if len(args) < 1 {
@@ -577,10 +583,10 @@ func LoadTSL(pl *Pipeline, ctx *Context, args ...string) (*Context, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		url = "file://" + url
 	}
-	
+
 	// Ensure the TSLFetchOptions are initialized with default values if not set
 	ctx.EnsureTSLFetchOptions()
-	
+
 	// Check if we have any option overrides specified in the arguments
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
@@ -595,20 +601,62 @@ func LoadTSL(pl *Pipeline, ctx *Context, args ...string) (*Context, error) {
 			}
 		}
 	}
-	
-	pl.Logger.Debug("Loading TSL", 
-		logging.F("url", url), 
+
+	pl.Logger.Debug("Loading TSL",
+		logging.F("url", url),
 		logging.F("user-agent", ctx.TSLFetchOptions.UserAgent),
 		logging.F("timeout", ctx.TSLFetchOptions.Timeout))
-		
+
 	tsl, err := etsi119612.FetchTSLWithReferencesAndOptions(url, *ctx.TSLFetchOptions)
 	if err != nil {
 		return ctx, fmt.Errorf("failed to load TSL from %s: %w", url, err)
 	}
 
+	// Safely get the provider count, handling potential nil pointers
+	var providerCount int
+	if tsl.StatusList.TslTrustServiceProviderList != nil && tsl.StatusList.TslTrustServiceProviderList.TslTrustServiceProvider != nil {
+		providerCount = len(tsl.StatusList.TslTrustServiceProviderList.TslTrustServiceProvider)
+	}
+
+	// Check if this is a LOTL with pointers to other TSLs and load them explicitly
+	if tsl.StatusList.TslSchemeInformation != nil &&
+		tsl.StatusList.TslSchemeInformation.TslPointersToOtherTSL != nil &&
+		tsl.StatusList.TslSchemeInformation.TslPointersToOtherTSL.TslOtherTSLPointer != nil {
+
+		pl.Logger.Info("LOTL detected - loading referenced TSLs",
+			logging.F("pointers_count", len(tsl.StatusList.TslSchemeInformation.TslPointersToOtherTSL.TslOtherTSLPointer)))
+
+		// Load each referenced TSL
+		for _, pointer := range tsl.StatusList.TslSchemeInformation.TslPointersToOtherTSL.TslOtherTSLPointer {
+			if pointer != nil && pointer.TSLLocation != "" {
+				referencedTSL, err := etsi119612.FetchTSLWithOptions(pointer.TSLLocation, *ctx.TSLFetchOptions)
+				if err != nil {
+					pl.Logger.Warn("Failed to load referenced TSL",
+						logging.F("url", pointer.TSLLocation),
+						logging.F("error", err))
+					continue
+				}
+
+				// Count providers in referenced TSL
+				var refProviderCount int
+				if referencedTSL.StatusList.TslTrustServiceProviderList != nil &&
+					referencedTSL.StatusList.TslTrustServiceProviderList.TslTrustServiceProvider != nil {
+					refProviderCount = len(referencedTSL.StatusList.TslTrustServiceProviderList.TslTrustServiceProvider)
+				}
+
+				pl.Logger.Info("Loaded referenced TSL",
+					logging.F("url", pointer.TSLLocation),
+					logging.F("providers", refProviderCount))
+
+				// Add the referenced TSL to the context stack
+				ctx.EnsureTSLStack().TSLs.Push(referencedTSL)
+			}
+		}
+	}
+
 	pl.Logger.Info("Loaded TSL",
 		logging.F("url", url),
-		logging.F("providers", len(tsl.StatusList.TslTrustServiceProviderList.TslTrustServiceProvider)))
+		logging.F("providers", providerCount))
 
 	ctx.EnsureTSLStack().TSLs.Push(tsl)
 	return ctx, nil
@@ -621,8 +669,8 @@ func LoadTSL(pl *Pipeline, ctx *Context, args ...string) (*Context, error) {
 //   - pl: Pipeline instance managing the step execution
 //   - ctx: Pipeline context containing state information
 //   - args: String slice with options in the format "key:value", where key can be:
-//     - user-agent: Custom User-Agent header for HTTP requests
-//     - timeout: Maximum time to wait for HTTP requests (any valid Go duration string)
+//   - user-agent: Custom User-Agent header for HTTP requests
+//   - timeout: Maximum time to wait for HTTP requests (any valid Go duration string)
 //
 // Returns:
 //   - *Context: Updated context with the configured fetch options
@@ -630,12 +678,12 @@ func LoadTSL(pl *Pipeline, ctx *Context, args ...string) (*Context, error) {
 //
 // Example usage in pipeline configuration:
 //   - set-fetch-options:
-//     - user-agent:MyCustomUserAgent/1.0
-//     - timeout:60s
+//   - user-agent:MyCustomUserAgent/1.0
+//   - timeout:60s
 func SetFetchOptions(pl *Pipeline, ctx *Context, args ...string) (*Context, error) {
 	// Ensure the TSLFetchOptions are initialized
 	ctx.EnsureTSLFetchOptions()
-	
+
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "user-agent:") {
 			ctx.TSLFetchOptions.UserAgent = strings.TrimPrefix(arg, "user-agent:")
@@ -652,7 +700,7 @@ func SetFetchOptions(pl *Pipeline, ctx *Context, args ...string) (*Context, erro
 			pl.Logger.Warn("Unknown fetch option", logging.F("option", arg))
 		}
 	}
-	
+
 	return ctx, nil
 }
 
@@ -692,11 +740,34 @@ func SelectCertPool(pl *Pipeline, ctx *Context, args ...string) (*Context, error
 	ctx.InitCertPool()
 	for _, tsl := range ctx.TSLs.ToSlice() {
 		if tsl != nil {
-			tsl.WithTrustServices(func(tsp *etsi119612.TSPType, svc *etsi119612.TSPServiceType) {
-				svc.WithCertificates(func(cert *x509.Certificate) {
-					ctx.CertPool.AddCert(cert)
-				})
-			})
+			// Safely iterate through trust services and certificates
+			if tsl.StatusList.TslTrustServiceProviderList != nil {
+				for _, tsp := range tsl.StatusList.TslTrustServiceProviderList.TslTrustServiceProvider {
+					if tsp != nil && tsp.TslTSPServices != nil {
+						for _, svc := range tsp.TslTSPServices.TslTSPService {
+							if svc != nil && svc.TslServiceInformation != nil && svc.TslServiceInformation.TslServiceDigitalIdentity != nil {
+								for _, digitalId := range svc.TslServiceInformation.TslServiceDigitalIdentity.DigitalId {
+									if digitalId != nil && digitalId.X509Certificate != "" {
+										// Decode the base64 encoded certificate
+										certBytes, err := base64.StdEncoding.DecodeString(digitalId.X509Certificate)
+										if err != nil {
+											continue // Skip invalid certificates
+										}
+
+										// Parse the certificate
+										cert, err := x509.ParseCertificate(certBytes)
+										if err != nil {
+											continue // Skip invalid certificates
+										}
+
+										ctx.CertPool.AddCert(cert)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 	return ctx, nil

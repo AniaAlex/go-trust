@@ -1,0 +1,19 @@
+# Step 2: Load LOTL from GitHub repository with cache busting
+- load:
+    - "https://raw.githubusercontent.com/AniaAlex/comprehensive-test-setup/refs/heads/main/test-trust-lotl/lotl.xml"
+
+# Step 3: Extract certificates into certificate pool
+- select: []
+
+# Step 4: Log information about the loaded LOTL
+- log:
+    - "Successfully loaded LOTL from GitHub repository"
+
+# Step 5: Publish the LOTL to local output directory
+- publish:
+    - "./output"
+# Step 6: Optional - Transform to HTML for visualization
+# - transform:
+#   - "embedded:tsl-to-html.xslt"
+#   - "./output"
+#   - "html"
