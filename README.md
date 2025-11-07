@@ -855,6 +855,7 @@ docker build -t go-trust:latest .
 
 # Run container
 docker run -d \
+  --name go-trust-server \
   -p 6001:6001 \
   -v $(pwd)/pipeline.yaml:/app/pipeline.yaml \
   -v $(pwd)/config.yaml:/app/config.yaml \
