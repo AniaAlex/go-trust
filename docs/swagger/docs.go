@@ -46,7 +46,7 @@ const docTemplate = `{
         },
         "/evaluation": {
             "post": {
-                "description": "Evaluates whether a name-to-key binding is trusted according to loaded TSLs\n\nThis endpoint implements the AuthZEN Trust Registry Profile as specified in\ndraft-johansson-authzen-trust. It validates that a public key (in resource.key)\nis correctly bound to a name (in subject.id) according to ETSI TS 119612 Trust Status Lists.\n\nThe request MUST have:\n- subject.type = \"key\" and subject.id = the name to validate\n- resource.type = \"jwk\" or \"x5c\" with resource.key containing the public key/certificates\n- resource.id MUST equal subject.id\n- action (optional) with name = the role being validated",
+                "description": "Evaluates whether a name-to-key binding is trusted according to loaded trust registries\n\nThis endpoint implements the AuthZEN Trust Registry Profile as specified in\ndraft-johansson-authzen-trust. It validates that a public key (in resource.key)\nis correctly bound to a name (in subject.id) using configured trust registries\n(ETSI TS 119612 TSLs, OpenID Federation, DID methods, etc.).\n\nThe request MUST have:\n- subject.type = \"key\" and subject.id = the name to validate\n- resource.type = \"jwk\" or \"x5c\" with resource.key containing the public key/certificates\n- resource.id MUST equal subject.id\n- action (optional) with name = the role being validated",
                 "consumes": [
                     "application/json"
                 ],

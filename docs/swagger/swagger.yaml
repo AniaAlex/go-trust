@@ -191,11 +191,12 @@ paths:
       consumes:
       - application/json
       description: |-
-        Evaluates whether a name-to-key binding is trusted according to loaded TSLs
+        Evaluates whether a name-to-key binding is trusted according to loaded trust registries
 
         This endpoint implements the AuthZEN Trust Registry Profile as specified in
         draft-johansson-authzen-trust. It validates that a public key (in resource.key)
-        is correctly bound to a name (in subject.id) according to ETSI TS 119612 Trust Status Lists.
+        is correctly bound to a name (in subject.id) using configured trust registries
+        (ETSI TS 119612 TSLs, OpenID Federation, DID methods, etc.).
 
         The request MUST have:
         - subject.type = "key" and subject.id = the name to validate

@@ -15,6 +15,24 @@ server:
   # Accepts duration strings: 10s, 1m, 5m, 1h
   # Environment variable: GT_FREQUENCY
   frequency: "5m"
+  
+  # External URL for AuthZEN discovery (optional)
+  # Environment variable: GT_EXTERNAL_URL
+  external_url: ""
+  
+  # TLS/HTTPS configuration
+  tls:
+    # Enable TLS/HTTPS (default: false)
+    # Environment variable: GT_TLS_ENABLED (true/false)
+    enabled: false
+    
+    # Path to TLS certificate file (required when enabled: true)
+    # Environment variable: GT_TLS_CERT_FILE
+    cert_file: "/path/to/cert.pem"
+    
+    # Path to TLS private key file (required when enabled: true)
+    # Environment variable: GT_TLS_KEY_FILE
+    key_file: "/path/to/key.pem"
 
 # Logging configuration
 logging:
