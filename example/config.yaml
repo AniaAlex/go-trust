@@ -6,11 +6,17 @@ server:
   # HTTP server hostname (default: 127.0.0.1)
   # Environment variable: GT_HOST
   host: "127.0.0.1"
-  
+
+  # TLS/HTTPS configuration
+  tls:
+    enabled: false
+    cert_file: "/etc/certs/go-trust.pem"
+    key_file: "/etc/certsgo-trust.key"
+
   # HTTP server port (default: 6001)
   # Environment variable: GT_PORT
   port: "6001"
-  
+
   # Pipeline update frequency (default: 5m)
   # Accepts duration strings: 10s, 1m, 5m, 1h
   # Environment variable: GT_FREQUENCY
@@ -21,11 +27,11 @@ logging:
   # Log level: debug, info, warn, error, fatal (default: info)
   # Environment variable: GT_LOG_LEVEL
   level: "info"
-  
+
   # Log format: text or json (default: text)
   # Environment variable: GT_LOG_FORMAT
   format: "text"
-  
+
   # Log output: stdout, stderr, or file path (default: stdout)
   # Environment variable: GT_LOG_OUTPUT
   output: "stdout"
@@ -35,15 +41,15 @@ pipeline:
   # Request timeout duration (default: 30s)
   # Environment variable: GT_PIPELINE_TIMEOUT
   timeout: "30s"
-  
+
   # Maximum request size in bytes (default: 10485760 = 10MB)
   # Environment variable: GT_MAX_REQUEST_SIZE
   max_request_size: 10485760
-  
+
   # Maximum number of HTTP redirects to follow (default: 3)
   # Environment variable: GT_MAX_REDIRECTS
   max_redirects: 3
-  
+
   # List of allowed hosts for TSL fetching (wildcard supported)
   # Leave empty to allow all hosts
   # Environment variable: GT_ALLOWED_HOSTS (comma-separated)
@@ -56,11 +62,11 @@ security:
   # API rate limit in requests per second (default: 100)
   # Environment variable: GT_RATE_LIMIT_RPS
   rate_limit_rps: 100
-  
+
   # Enable CORS (Cross-Origin Resource Sharing) (default: false)
   # Environment variable: GT_ENABLE_CORS (true/false)
   enable_cors: false
-  
+
   # List of allowed CORS origins (requires enable_cors: true)
   # Environment variable: GT_ALLOWED_ORIGINS (comma-separated)
   allowed_origins:

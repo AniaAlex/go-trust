@@ -154,6 +154,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --port         API server port (default: 6001)")
 	fmt.Fprintln(os.Stderr, "  --frequency    Pipeline update frequency (default: 5m)")
 	fmt.Fprintln(os.Stderr, "  --no-server    Run pipeline once and exit (no API server)")
+	fmt.Fprintln(os.Stderr, "TLS/HTTPS options:")
+	fmt.Fprintln(os.Stderr, "  --tls-enable   Enable TLS/HTTPS (default: false)")
+	fmt.Fprintln(os.Stderr, "  --tls-cert     TLS certificate file path")
+	fmt.Fprintln(os.Stderr, "  --tls-key      TLS private key file path")
 	fmt.Fprintln(os.Stderr, "Logging options:")
 	fmt.Fprintln(os.Stderr, "  --log-level    Logging level: debug, info, warn, error, fatal (default: info)")
 	fmt.Fprintln(os.Stderr, "  --log-format   Logging format: text or json (default: text)")
@@ -193,6 +197,11 @@ func main() {
 	port := flag.String("port", "", "API server port (overrides config file)")
 	freq := flag.Duration("frequency", 0, "Pipeline update frequency (overrides config file)")
 	noServer := flag.Bool("no-server", false, "Run pipeline once and exit (no API server)")
+
+	// TLS configuration
+	tlsEnabled := flag.Bool("tls-enable", false, "Enable TLS/HTTPS (overrides config file)")
+	tlsCertFile := flag.String("tls-cert", "", "TLS certificate file path (overrides config file)")
+	tlsKeyFile := flag.String("tls-key", "", "TLS private key file path (overrides config file)")
 
 	// Logging configuration
 	logLevel := flag.String("log-level", "", "Logging level (overrides config file)")
@@ -236,6 +245,15 @@ func main() {
 	}
 	if *freq != 0 {
 		cfg.Server.Frequency = *freq
+	}
+	if *tlsEnabled {
+		cfg.Server.TLS.Enabled = *tlsEnabled
+	}
+	if *tlsCertFile != "" {
+		cfg.Server.TLS.CertFile = *tlsCertFile
+	}
+	if *tlsKeyFile != "" {
+		cfg.Server.TLS.KeyFile = *tlsKeyFile
 	}
 	if *logLevel != "" {
 		cfg.Logging.Level = *logLevel
@@ -352,17 +370,36 @@ func main() {
 	listenAddr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
 
 	// Log startup information
+	protocol := "HTTP"
+	if cfg.Server.TLS.Enabled {
+		protocol = "HTTPS"
+	}
 	logger.Info("API server starting",
 		logging.F("address", listenAddr),
+		logging.F("protocol", protocol),
+		logging.F("tls_enabled", cfg.Server.TLS.Enabled),
 		logging.F("version", Version),
 		logging.F("pipeline", pipelineFile),
 		logging.F("log_level", cfg.Logging.Level),
 		logging.F("frequency", cfg.Server.Frequency.String()))
 
-	if err := r.Run(listenAddr); err != nil {
+	// Start server with or without TLS based on configuration
+	var serverErr error
+	if cfg.Server.TLS.Enabled {
+		logger.Info("Starting HTTPS server",
+			logging.F("cert_file", cfg.Server.TLS.CertFile),
+			logging.F("key_file", cfg.Server.TLS.KeyFile))
+		serverErr = r.RunTLS(listenAddr, cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+	} else {
+		logger.Info("Starting HTTP server")
+		serverErr = r.Run(listenAddr)
+	}
+
+	if serverErr != nil {
 		logger.Error("API server failed to start",
-			logging.F("error", err.Error()),
-			logging.F("address", listenAddr))
+			logging.F("error", serverErr.Error()),
+			logging.F("address", listenAddr),
+			logging.F("protocol", protocol))
 		os.Exit(1)
 	}
 }

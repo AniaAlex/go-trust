@@ -28,6 +28,14 @@ type ServerConfig struct {
 	Port        string        `yaml:"port"`
 	Frequency   time.Duration `yaml:"frequency"`
 	ExternalURL string        `yaml:"external_url"` // External URL for PDP discovery (e.g., https://pdp.example.com)
+	TLS         TLSConfig     `yaml:"tls"`
+}
+
+// TLSConfig contains TLS/HTTPS server configuration settings.
+type TLSConfig struct {
+	Enabled  bool   `yaml:"enabled"`  // Enable TLS/HTTPS
+	CertFile string `yaml:"cert_file"` // Path to TLS certificate file
+	KeyFile  string `yaml:"key_file"`  // Path to TLS private key file
 }
 
 // LoggingConfig contains logging configuration settings.
@@ -59,6 +67,11 @@ func DefaultConfig() *Config {
 			Host:      "127.0.0.1",
 			Port:      "6001",
 			Frequency: 5 * time.Minute,
+			TLS: TLSConfig{
+				Enabled:  false,
+				CertFile: "",
+				KeyFile:  "",
+			},
 		},
 		Logging: LoggingConfig{
 			Level:  "info",
@@ -130,6 +143,20 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Server.Frequency = d
 		}
 	}
+	if v := os.Getenv("GT_EXTERNAL_URL"); v != "" {
+		cfg.Server.ExternalURL = v
+	}
+
+	// TLS configuration
+	if v := os.Getenv("GT_TLS_ENABLED"); v != "" {
+		cfg.Server.TLS.Enabled = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := os.Getenv("GT_TLS_CERT_FILE"); v != "" {
+		cfg.Server.TLS.CertFile = v
+	}
+	if v := os.Getenv("GT_TLS_KEY_FILE"); v != "" {
+		cfg.Server.TLS.KeyFile = v
+	}
 
 	// Logging configuration
 	if v := os.Getenv("GT_LOG_LEVEL"); v != "" {
@@ -185,6 +212,23 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.Frequency <= 0 {
 		return fmt.Errorf("server frequency must be positive")
+	}
+
+	// Validate TLS configuration
+	if c.Server.TLS.Enabled {
+		if c.Server.TLS.CertFile == "" {
+			return fmt.Errorf("TLS certificate file is required when TLS is enabled")
+		}
+		if c.Server.TLS.KeyFile == "" {
+			return fmt.Errorf("TLS key file is required when TLS is enabled")
+		}
+		// Check if certificate and key files exist
+		if err := validation.ValidateFilePath(c.Server.TLS.CertFile); err != nil {
+			return fmt.Errorf("invalid TLS certificate file: %w", err)
+		}
+		if err := validation.ValidateFilePath(c.Server.TLS.KeyFile); err != nil {
+			return fmt.Errorf("invalid TLS key file: %w", err)
+		}
 	}
 
 	// Validate logging configuration
