@@ -33,7 +33,7 @@ type ServerConfig struct {
 
 // TLSConfig contains TLS/HTTPS server configuration settings.
 type TLSConfig struct {
-	Enabled  bool   `yaml:"enabled"`  // Enable TLS/HTTPS
+	Enabled  bool   `yaml:"enabled"`   // Enable TLS/HTTPS
 	CertFile string `yaml:"cert_file"` // Path to TLS certificate file
 	KeyFile  string `yaml:"key_file"`  // Path to TLS private key file
 }

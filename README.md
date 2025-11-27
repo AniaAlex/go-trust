@@ -80,7 +80,8 @@ type TrustRegistry interface {
 Current implementations:
 - **ETSI TSL Registry**: Validates X.509 certificates against ETSI TS 119 612 Trust Status Lists
 - **OpenID Federation Registry**: Validates entity trust chains using OpenID Federation protocol
-- **DID Methods**: *(planned)* Decentralized identifier resolution
+- **DID Web Registry**: Resolves and validates DIDs using the did:web method (W3C specification)
+- **DID Methods**: *(planned)* Additional DID method resolvers (did:key, did:ion, etc.)
 
 #### Resolution Strategies
 
@@ -246,6 +247,145 @@ The registry performs the following validation steps:
 4. **Policy Application**: Applies metadata policies from superior entities
 5. **Constraint Checking**: Validates constraints (max path length, naming, entity types)
 6. **Trust Mark Verification**: Checks for required trust marks if configured
+
+### DID Web Registry
+
+The DID Web registry implements support for the **did:web** method as specified by the [W3C DID Method Web specification](https://w3c-ccg.github.io/did-method-web/). This method allows DIDs to be resolved via HTTPS from domain names, leveraging existing web infrastructure and domain reputation.
+
+#### Features
+
+- **HTTPS Resolution**: Resolves DID documents via HTTPS with strong TLS requirements (TLS 1.2+)
+- **Domain-based Trust**: Leverages existing web PKI and domain ownership
+- **JWK Validation**: Matches JSON Web Keys against DID document verification methods
+- **Flexible Identifiers**: Supports bare domains, paths, and port specifications
+- **Security**: Enforces TLS certificate validation and secure cipher suites per W3C spec
+
+#### Resolution Algorithm
+
+The registry implements the did:web resolution algorithm:
+
+1. **Parse DID**: Extract domain and optional path from `did:web:` identifier
+2. **Construct URL**: Convert to HTTPS URL following W3C specification rules
+3. **Fetch Document**: Perform HTTPS GET request with proper headers
+4. **Validate**: Verify DID document ID matches requested DID
+5. **Extract Keys**: Parse verification methods from DID document
+6. **Match**: Compare request key against document verification methods
+
+#### Examples
+
+**Basic Domain Resolution:**
+```
+DID: did:web:example.com
+URL: https://example.com/.well-known/did.json
+```
+
+**With Path:**
+```
+DID: did:web:example.com:users:alice
+URL: https://example.com/users/alice/did.json
+```
+
+**With Port:**
+```
+DID: did:web:example.com%3A3000
+URL: https://example.com:3000/.well-known/did.json
+```
+
+**With Port and Path:**
+```
+DID: did:web:example.com%3A3000:users:bob
+URL: https://example.com:3000/users/bob/did.json
+```
+
+#### AuthZEN Integration
+
+**Request Format:**
+```json
+{
+  "subject": {
+    "type": "key",
+    "id": "did:web:example.com"
+  },
+  "resource": {
+    "type": "jwk",
+    "id": "did:web:example.com",
+    "key": [{
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    }]
+  },
+  "action": {
+    "name": "authenticate"
+  }
+}
+```
+
+**Sample DID Document** (hosted at `https://example.com/.well-known/did.json`):
+```json
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/suites/jws-2020/v1"
+  ],
+  "id": "did:web:example.com",
+  "verificationMethod": [
+    {
+      "id": "did:web:example.com#key-1",
+      "type": "JsonWebKey2020",
+      "controller": "did:web:example.com",
+      "publicKeyJwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+      }
+    }
+  ],
+  "authentication": ["did:web:example.com#key-1"]
+}
+```
+
+**Response with Valid Key:**
+```json
+{
+  "decision": true,
+  "context": {
+    "reason": {
+      "did": "did:web:example.com",
+      "verification_method": "did:web:example.com#key-1",
+      "key_type": "JsonWebKey2020",
+      "resolution_ms": 45,
+      "verification_methods": 1
+    }
+  }
+}
+```
+
+#### Security Considerations
+
+The did:web registry implements security requirements from the W3C specification:
+
+- **TLS 1.2+** with strong cipher suites (ECDHE-ECDSA/RSA with AES-256-GCM or ChaCha20-Poly1305)
+- **Certificate Validation**: Enforces valid TLS certificates (can be disabled for testing only)
+- **ID Verification**: DID document ID must match the requested DID
+- **DNS Security**: Recommend using DNS over HTTPS (DoH) to prevent tracking
+- **CORS Support**: DID documents should include appropriate CORS headers
+
+**Supported Key Types:**
+- Ed25519 (OKP with crv=Ed25519)
+- P-256, P-384 (EC curves)
+- RSA (2048+ bits)
+
+**Configuration Example:**
+```go
+import "github.com/SUNET/go-trust/pkg/registry/didweb"
+
+registry, err := didweb.NewDIDWebRegistry(didweb.Config{
+    Timeout:     30 * time.Second,
+    Description: "DID Web Resolver",
+    // InsecureSkipVerify: true, // Only for testing!
+})
+```
 
 For more details on OpenID Federation, see the [specification](https://openid.net/specs/openid-federation-1_0.html).
 
