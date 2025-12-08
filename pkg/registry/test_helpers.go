@@ -8,10 +8,12 @@ import (
 
 // MockRegistry is a test helper that implements TrustRegistry
 type MockRegistry struct {
-	name     string
-	decision bool
-	types    []string
-	err      error
+	name                   string
+	decision               bool
+	types                  []string
+	err                    error
+	supportsResolutionOnly bool
+	trustMetadata          interface{}
 }
 
 // Name returns the mock registry name
@@ -34,20 +36,32 @@ func (m *MockRegistry) SupportedResourceTypes() []string {
 	return m.types
 }
 
+// SupportsResolutionOnly returns whether this mock supports resolution-only requests
+func (m *MockRegistry) SupportsResolutionOnly() bool {
+	return m.supportsResolutionOnly
+}
+
 // Evaluate returns the configured decision or error
 func (m *MockRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
 
-	return &authzen.EvaluationResponse{
+	response := &authzen.EvaluationResponse{
 		Decision: m.decision,
 		Context: &authzen.EvaluationResponseContext{
 			Reason: map[string]interface{}{
 				"registry": m.name,
 			},
 		},
-	}, nil
+	}
+
+	// Include trust metadata if configured
+	if m.trustMetadata != nil {
+		response.Context.TrustMetadata = m.trustMetadata
+	}
+
+	return response, nil
 }
 
 // Healthy always returns true for mock registries

@@ -109,7 +109,18 @@ func (r *OIDFedRegistry) SupportedResourceTypes() []string {
 	}
 }
 
+// SupportsResolutionOnly returns true for OpenID Federation registry.
+// The registry supports resolution-only requests where clients can
+// retrieve entity configurations and trust chain metadata without
+// validating a specific key binding.
+func (r *OIDFedRegistry) SupportsResolutionOnly() bool {
+	return true
+}
+
 // Evaluate performs an AuthZEN access evaluation using OpenID Federation trust chains.
+// For resolution-only requests (where IsResolutionOnlyRequest() returns true), the method
+// returns decision=true with the entity configuration in trust_metadata, without validating
+// a specific key binding.
 func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	// Extract entity ID from the request
 	entityID, err := r.extractEntityID(req)
@@ -168,6 +179,11 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 	// Extract metadata and build decision
 	metadata := r.extractMetadata(chain)
 
+	// Check if this is a resolution-only request
+	if req.IsResolutionOnlyRequest() {
+		return r.buildResolutionOnlyResponse(entityID, chain, metadata), nil
+	}
+
 	// Extract certificates from JWKS if requested
 	var certificates []*x509.Certificate
 	if req.Context != nil {
@@ -191,7 +207,8 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 	return &authzen.EvaluationResponse{
 		Decision: true,
 		Context: &authzen.EvaluationResponseContext{
-			Reason: reasonData,
+			Reason:        reasonData,
+			TrustMetadata: r.chainToTrustMetadata(chain, metadata),
 		},
 	}, nil
 }
@@ -352,6 +369,116 @@ func (r *OIDFedRegistry) getTrustAnchorID(chain oidfed.TrustChain) string {
 
 	// The last entity in the chain is the trust anchor
 	return chain[len(chain)-1].Subject
+}
+
+// buildResolutionOnlyResponse creates an EvaluationResponse for resolution-only requests.
+// The response includes decision=true and the entity configuration in trust_metadata.
+func (r *OIDFedRegistry) buildResolutionOnlyResponse(entityID string, chain oidfed.TrustChain, metadata map[string]interface{}) *authzen.EvaluationResponse {
+	return &authzen.EvaluationResponse{
+		Decision: true,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: map[string]interface{}{
+				"entity_id":          entityID,
+				"resolution_only":    true,
+				"trust_chain_length": len(chain),
+				"trust_anchor":       r.getTrustAnchorID(chain),
+			},
+			TrustMetadata: r.chainToTrustMetadata(chain, metadata),
+		},
+	}
+}
+
+// chainToTrustMetadata converts a trust chain and metadata to the trust_metadata format.
+// This returns an OpenID Federation entity configuration structure.
+func (r *OIDFedRegistry) chainToTrustMetadata(chain oidfed.TrustChain, metadata map[string]interface{}) map[string]interface{} {
+	if len(chain) == 0 {
+		return nil
+	}
+
+	// The first statement in the chain is the leaf entity's configuration
+	leafStatement := chain[0]
+
+	trustMeta := map[string]interface{}{
+		"iss":          leafStatement.Issuer,
+		"sub":          leafStatement.Subject,
+		"metadata":     metadata,
+		"trust_chain":  r.buildTrustChainArray(chain),
+		"trust_anchor": r.getTrustAnchorID(chain),
+	}
+
+	// Include issued_at and expires_at
+	if !leafStatement.IssuedAt.Time.IsZero() {
+		trustMeta["iat"] = leafStatement.IssuedAt.Time.Unix()
+	}
+	if !leafStatement.ExpiresAt.Time.IsZero() {
+		trustMeta["exp"] = leafStatement.ExpiresAt.Time.Unix()
+	}
+
+	// Include JWKS keys summary if available
+	if leafStatement.JWKS.Set != nil && leafStatement.JWKS.Set.Len() > 0 {
+		trustMeta["jwks"] = r.jwksToMap(leafStatement.JWKS)
+	}
+
+	return trustMeta
+}
+
+// buildTrustChainArray converts the trust chain to an array of entity statements.
+func (r *OIDFedRegistry) buildTrustChainArray(chain oidfed.TrustChain) []map[string]interface{} {
+	chainArray := make([]map[string]interface{}, len(chain))
+	for i, stmt := range chain {
+		stmtMap := map[string]interface{}{
+			"iss": stmt.Issuer,
+			"sub": stmt.Subject,
+		}
+		if !stmt.IssuedAt.Time.IsZero() {
+			stmtMap["iat"] = stmt.IssuedAt.Time.Unix()
+		}
+		if !stmt.ExpiresAt.Time.IsZero() {
+			stmtMap["exp"] = stmt.ExpiresAt.Time.Unix()
+		}
+		chainArray[i] = stmtMap
+	}
+	return chainArray
+}
+
+// jwksToMap converts a JWKS to a map representation.
+func (r *OIDFedRegistry) jwksToMap(jwks oidfedjwx.JWKS) map[string]interface{} {
+	if jwks.Set == nil {
+		return nil
+	}
+
+	keys := make([]map[string]interface{}, 0)
+	for i := 0; i < jwks.Set.Len(); i++ {
+		key, ok := jwks.Set.Key(i)
+		if !ok {
+			continue
+		}
+
+		keyMap := map[string]interface{}{
+			"kty": key.KeyType().String(),
+		}
+
+		// Add key ID if present
+		if kid, ok := key.KeyID(); ok && kid != "" {
+			keyMap["kid"] = kid
+		}
+
+		// Add algorithm if present
+		if alg, ok := key.Algorithm(); ok && alg.String() != "" {
+			keyMap["alg"] = alg.String()
+		}
+
+		// Add use if present
+		if use, ok := key.KeyUsage(); ok && use != "" {
+			keyMap["use"] = use
+		}
+
+		keys = append(keys, keyMap)
+	}
+
+	return map[string]interface{}{
+		"keys": keys,
+	}
 }
 
 // getTrustAnchorEntityIDs returns a list of configured trust anchor entity IDs.

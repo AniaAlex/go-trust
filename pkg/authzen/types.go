@@ -59,15 +59,28 @@ type EvaluationResponse struct {
 	Context  *EvaluationResponseContext `json:"context,omitempty"`       // Optional context with decision details
 }
 
-// EvaluationResponseContext contains additional information about an authorization decision
+// EvaluationResponseContext contains additional information about an authorization decision.
+// According to the AuthZEN Trust Registry Profile, this context may include trust_metadata
+// for resolution-only requests or as additional information for trust evaluation responses.
 // @Description Context information for evaluation response
 type EvaluationResponseContext struct {
 	ID     string                 `json:"id,omitempty" example:"decision-123"`   // Optional identifier for the decision
 	Reason map[string]interface{} `json:"reason,omitempty" swaggertype:"object"` // Reason information (user or admin)
+	// TrustMetadata contains the resolved trust metadata for the subject.
+	// For DID resolution: contains the DID Document
+	// For OpenID Federation: contains the Entity Configuration
+	// This field is set when trust_metadata is requested or for resolution-only requests.
+	TrustMetadata interface{} `json:"trust_metadata,omitempty" swaggertype:"object"` // DID Document or Entity Configuration
 }
 
 // Validate checks if the EvaluationRequest is compliant with the AuthZEN Trust Registry Profile.
 // Returns an error if the request doesn't meet the specification requirements.
+//
+// Per the specification, requests can be either:
+// 1. Full trust evaluation: validates name-to-key binding (requires resource.type and resource.key)
+// 2. Resolution-only: retrieves trust metadata without key validation (resource.type and resource.key optional)
+//
+// Resolution-only requests are supported by registries that implement SupportsResolutionOnly().
 func (r *EvaluationRequest) Validate() error {
 	// Subject.type MUST be "key"
 	if r.Subject.Type != "key" {
@@ -78,6 +91,18 @@ func (r *EvaluationRequest) Validate() error {
 	if r.Subject.ID == "" {
 		return fmt.Errorf("subject.id must be present")
 	}
+
+	// Check if this is a resolution-only request (no type or key)
+	if r.IsResolutionOnlyRequest() {
+		// For resolution-only requests, we only need subject.id
+		// Resource.id should match subject.id if present
+		if r.Resource.ID != "" && r.Resource.ID != r.Subject.ID {
+			return fmt.Errorf("resource.id (%s) must match subject.id (%s)", r.Resource.ID, r.Subject.ID)
+		}
+		return nil
+	}
+
+	// For full trust evaluation requests:
 
 	// Resource.type MUST be "jwk" or "x5c"
 	if r.Resource.Type != "jwk" && r.Resource.Type != "x5c" {
@@ -98,6 +123,14 @@ func (r *EvaluationRequest) Validate() error {
 	}
 
 	return nil
+}
+
+// IsResolutionOnlyRequest returns true if the request is a resolution-only request.
+// Resolution-only requests have no resource.type or no resource.key, meaning they
+// are only requesting trust metadata (DID document, entity configuration, etc.)
+// without validating a specific name-to-key binding.
+func (r *EvaluationRequest) IsResolutionOnlyRequest() bool {
+	return r.Resource.Type == "" || len(r.Resource.Key) == 0
 }
 
 // PDPMetadata represents Policy Decision Point metadata as defined in Section 9 of the

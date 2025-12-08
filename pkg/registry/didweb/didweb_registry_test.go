@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/SUNET/go-trust/pkg/authzen"
 	"github.com/stretchr/testify/assert"
@@ -314,4 +315,228 @@ func TestRefresh(t *testing.T) {
 
 	err = registry.Refresh(context.Background())
 	assert.NoError(t, err)
+}
+
+// TestSupportsResolutionOnly tests the SupportsResolutionOnly method
+func TestSupportsResolutionOnly(t *testing.T) {
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	// DIDWebRegistry should support resolution-only requests
+	assert.True(t, registry.SupportsResolutionOnly())
+}
+
+// TestResolutionOnlyRequest tests resolution-only request handling
+func TestResolutionOnlyRequest(t *testing.T) {
+	// Create a test DID document
+	testDIDDoc := &DIDDocument{
+		Context: []interface{}{"https://www.w3.org/ns/did/v1"},
+		ID:      "did:web:localhost",
+		VerificationMethod: []VerificationMethod{
+			{
+				ID:         "did:web:localhost#key-1",
+				Type:       "JsonWebKey2020",
+				Controller: "did:web:localhost",
+				PublicKeyJwk: map[string]interface{}{
+					"kty": "OKP",
+					"crv": "Ed25519",
+					"x":   "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+				},
+			},
+		},
+		Authentication: []interface{}{"did:web:localhost#key-1"},
+	}
+
+	// Create a mock HTTP server that serves the DID document
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(testDIDDoc)
+	}))
+	defer server.Close()
+
+	// Create a custom DIDWebRegistry with a modified HTTP client for testing
+	registry, err := NewDIDWebRegistry(Config{
+		InsecureSkipVerify: true,
+	})
+	require.NoError(t, err)
+
+	// Override httpClient to use the test server
+	registry.httpClient = server.Client()
+
+	// Create a resolution-only request (no type or key)
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "did:web:localhost",
+		},
+		Resource: authzen.Resource{
+			ID: "did:web:localhost", // No type or key
+		},
+	}
+
+	// Verify this is recognized as resolution-only
+	assert.True(t, req.IsResolutionOnlyRequest())
+	assert.NoError(t, req.Validate())
+
+	// The Evaluate call would need real network access or more sophisticated mocking
+	// For now, test the buildResolutionOnlyResponse and didDocumentToTrustMetadata methods
+
+	t.Run("buildResolutionOnlyResponse", func(t *testing.T) {
+		startTime := time.Now()
+		resp := registry.buildResolutionOnlyResponse(testDIDDoc, startTime)
+		assert.True(t, resp.Decision)
+		assert.NotNil(t, resp.Context)
+		assert.NotNil(t, resp.Context.TrustMetadata)
+
+		// Verify trust_metadata contains the DID document
+		trustMeta, ok := resp.Context.TrustMetadata.(map[string]interface{})
+		assert.True(t, ok)
+		assert.Equal(t, "did:web:localhost", trustMeta["id"])
+		assert.NotNil(t, trustMeta["verificationMethod"])
+
+		// Verify reason includes resolution_only flag
+		assert.Equal(t, true, resp.Context.Reason["resolution_only"])
+	})
+
+	t.Run("didDocumentToTrustMetadata", func(t *testing.T) {
+		trustMeta := registry.didDocumentToTrustMetadata(testDIDDoc)
+
+		// Check required fields
+		assert.Equal(t, "did:web:localhost", trustMeta["id"])
+		assert.NotNil(t, trustMeta["@context"])
+
+		// Check verificationMethod
+		vms, ok := trustMeta["verificationMethod"].([]map[string]interface{})
+		assert.True(t, ok)
+		assert.Len(t, vms, 1)
+		assert.Equal(t, "did:web:localhost#key-1", vms[0]["id"])
+		assert.Equal(t, "JsonWebKey2020", vms[0]["type"])
+		assert.NotNil(t, vms[0]["publicKeyJwk"])
+
+		// Check authentication
+		assert.NotNil(t, trustMeta["authentication"])
+	})
+}
+
+// TestTrustMetadataInFullEvaluation tests that trust_metadata is included in successful full evaluations
+func TestTrustMetadataInFullEvaluation(t *testing.T) {
+	// Create a test DID document
+	testDIDDoc := &DIDDocument{
+		Context: "https://www.w3.org/ns/did/v1",
+		ID:      "did:web:example.com",
+		VerificationMethod: []VerificationMethod{
+			{
+				ID:         "did:web:example.com#key-1",
+				Type:       "JsonWebKey2020",
+				Controller: "did:web:example.com",
+				PublicKeyJwk: map[string]interface{}{
+					"kty": "OKP",
+					"crv": "Ed25519",
+					"x":   "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+				},
+			},
+		},
+	}
+
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	// Test the trust metadata conversion
+	trustMeta := registry.didDocumentToTrustMetadata(testDIDDoc)
+
+	assert.Equal(t, "did:web:example.com", trustMeta["id"])
+	assert.Equal(t, "https://www.w3.org/ns/did/v1", trustMeta["@context"])
+
+	vms, ok := trustMeta["verificationMethod"].([]map[string]interface{})
+	assert.True(t, ok)
+	assert.Len(t, vms, 1)
+	assert.Equal(t, "did:web:example.com#key-1", vms[0]["id"])
+}
+
+// TestDIDDocumentToTrustMetadataWithOptionalFields tests trust metadata conversion with all optional fields
+func TestDIDDocumentToTrustMetadataWithOptionalFields(t *testing.T) {
+	testDIDDoc := &DIDDocument{
+		Context:    []string{"https://www.w3.org/ns/did/v1", "https://w3id.org/security/suites/jws-2020/v1"},
+		ID:         "did:web:example.com",
+		Controller: "did:web:parent.com",
+		VerificationMethod: []VerificationMethod{
+			{
+				ID:         "did:web:example.com#key-1",
+				Type:       "JsonWebKey2020",
+				Controller: "did:web:example.com",
+				PublicKeyJwk: map[string]interface{}{
+					"kty": "EC",
+					"crv": "P-256",
+					"x":   "38M1FDts7Oea7urmseiugGW7tWc3mLpJh6rKe7xINZ8",
+					"y":   "nDQW6XZ7b_u2Sy9slofYLlG03sOEoug3I0aAPQ0exs4",
+				},
+			},
+			{
+				ID:           "did:web:example.com#key-2",
+				Type:         "EcdsaSecp256k1VerificationKey2019",
+				Controller:   "did:web:example.com",
+				PublicKeyHex: "02b97c30de767f084ce3080168ee293053ba33b235d7116a3263d29f1450936b71",
+			},
+		},
+		Authentication:  []interface{}{"did:web:example.com#key-1"},
+		AssertionMethod: []interface{}{"did:web:example.com#key-1"},
+		KeyAgreement:    []interface{}{"did:web:example.com#key-2"},
+		Service: []interface{}{
+			map[string]interface{}{
+				"id":              "did:web:example.com#service-1",
+				"type":            "LinkedDomains",
+				"serviceEndpoint": "https://example.com",
+			},
+		},
+	}
+
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	trustMeta := registry.didDocumentToTrustMetadata(testDIDDoc)
+
+	// Check all fields are present
+	assert.Equal(t, "did:web:example.com", trustMeta["id"])
+	assert.Equal(t, "did:web:parent.com", trustMeta["controller"])
+	assert.NotNil(t, trustMeta["@context"])
+	assert.NotNil(t, trustMeta["verificationMethod"])
+	assert.NotNil(t, trustMeta["authentication"])
+	assert.NotNil(t, trustMeta["assertionMethod"])
+	assert.NotNil(t, trustMeta["keyAgreement"])
+	assert.NotNil(t, trustMeta["service"])
+
+	// Check verification methods
+	vms, ok := trustMeta["verificationMethod"].([]map[string]interface{})
+	assert.True(t, ok)
+	assert.Len(t, vms, 2)
+
+	// First method has JWK
+	assert.NotNil(t, vms[0]["publicKeyJwk"])
+	assert.Empty(t, vms[0]["publicKeyHex"])
+
+	// Second method has hex key
+	assert.Empty(t, vms[1]["publicKeyJwk"])
+	assert.Equal(t, "02b97c30de767f084ce3080168ee293053ba33b235d7116a3263d29f1450936b71", vms[1]["publicKeyHex"])
+}
+
+// TestResolutionOnlyWithNonDIDWeb tests resolution-only with non-did:web identifier
+func TestResolutionOnlyWithNonDIDWeb(t *testing.T) {
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	// Resolution-only request with non-did:web identifier
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+		},
+		Resource: authzen.Resource{
+			ID: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+		},
+	}
+
+	resp, err := registry.Evaluate(context.Background(), req)
+	require.NoError(t, err)
+	assert.False(t, resp.Decision)
+	assert.Contains(t, resp.Context.Reason["error"], "must be a did:web identifier")
 }

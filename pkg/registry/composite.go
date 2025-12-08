@@ -274,6 +274,29 @@ func (c *CompositeRegistry) SupportedResourceTypes() []string {
 	return types
 }
 
+// SupportsResolutionOnly returns true if any child registry supports resolution-only requests.
+// For OR logic, resolution-only support means at least one child can resolve.
+// For AND logic, all children would need to support resolution-only for a meaningful result.
+func (c *CompositeRegistry) SupportsResolutionOnly() bool {
+	// For OR logic, any child supporting resolution-only is sufficient
+	if c.operator == LogicOR {
+		for _, reg := range c.registries {
+			if reg.SupportsResolutionOnly() {
+				return true
+			}
+		}
+		return false
+	}
+
+	// For AND, MAJORITY, QUORUM logic, we require all children to support resolution-only
+	for _, reg := range c.registries {
+		if !reg.SupportsResolutionOnly() {
+			return false
+		}
+	}
+	return len(c.registries) > 0
+}
+
 // Info returns metadata about this composite registry
 func (c *CompositeRegistry) Info() RegistryInfo {
 	desc := c.description

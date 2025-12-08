@@ -100,6 +100,13 @@ func NewDIDWebRegistry(config Config) (*DIDWebRegistry, error) {
 }
 
 // Evaluate implements TrustRegistry.Evaluate by resolving did:web DIDs and validating key bindings.
+//
+// For resolution-only requests (where IsResolutionOnlyRequest() returns true), the method
+// returns decision=true with the resolved DID document in trust_metadata, without validating
+// a specific key binding.
+//
+// For full trust evaluation requests, the method validates that the provided key matches
+// one of the verification methods in the resolved DID document.
 func (r *DIDWebRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	startTime := time.Now()
 
@@ -143,7 +150,13 @@ func (r *DIDWebRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 		}, nil
 	}
 
-	// Extract and validate the key from the request
+	// Check if this is a resolution-only request
+	if req.IsResolutionOnlyRequest() {
+		// For resolution-only requests, return the DID document in trust_metadata
+		return r.buildResolutionOnlyResponse(didDoc, startTime), nil
+	}
+
+	// For full trust evaluation, validate the key binding
 	matched, matchedMethod, err := r.verifyKeyBinding(req, didDoc)
 	if err != nil {
 		return &authzen.EvaluationResponse{
@@ -181,8 +194,73 @@ func (r *DIDWebRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 				"resolution_ms":        time.Since(startTime).Milliseconds(),
 				"verification_methods": len(didDoc.VerificationMethod),
 			},
+			TrustMetadata: r.didDocumentToTrustMetadata(didDoc),
 		},
 	}, nil
+}
+
+// buildResolutionOnlyResponse creates an EvaluationResponse for resolution-only requests.
+// The response includes decision=true and the DID document in trust_metadata.
+func (r *DIDWebRegistry) buildResolutionOnlyResponse(didDoc *DIDDocument, startTime time.Time) *authzen.EvaluationResponse {
+	return &authzen.EvaluationResponse{
+		Decision: true,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: map[string]interface{}{
+				"did":                  didDoc.ID,
+				"resolution_only":      true,
+				"resolution_ms":        time.Since(startTime).Milliseconds(),
+				"verification_methods": len(didDoc.VerificationMethod),
+			},
+			TrustMetadata: r.didDocumentToTrustMetadata(didDoc),
+		},
+	}
+}
+
+// didDocumentToTrustMetadata converts a DIDDocument to the trust_metadata format.
+// Returns the full DID document structure as specified in W3C DID Core.
+func (r *DIDWebRegistry) didDocumentToTrustMetadata(didDoc *DIDDocument) map[string]interface{} {
+	trustMeta := map[string]interface{}{
+		"@context": didDoc.Context,
+		"id":       didDoc.ID,
+	}
+
+	if didDoc.Controller != nil {
+		trustMeta["controller"] = didDoc.Controller
+	}
+
+	if len(didDoc.VerificationMethod) > 0 {
+		verificationMethods := make([]map[string]interface{}, len(didDoc.VerificationMethod))
+		for i, vm := range didDoc.VerificationMethod {
+			method := map[string]interface{}{
+				"id":         vm.ID,
+				"type":       vm.Type,
+				"controller": vm.Controller,
+			}
+			if vm.PublicKeyJwk != nil {
+				method["publicKeyJwk"] = vm.PublicKeyJwk
+			}
+			if vm.PublicKeyHex != "" {
+				method["publicKeyHex"] = vm.PublicKeyHex
+			}
+			verificationMethods[i] = method
+		}
+		trustMeta["verificationMethod"] = verificationMethods
+	}
+
+	if didDoc.Authentication != nil {
+		trustMeta["authentication"] = didDoc.Authentication
+	}
+	if didDoc.AssertionMethod != nil {
+		trustMeta["assertionMethod"] = didDoc.AssertionMethod
+	}
+	if didDoc.KeyAgreement != nil {
+		trustMeta["keyAgreement"] = didDoc.KeyAgreement
+	}
+	if didDoc.Service != nil {
+		trustMeta["service"] = didDoc.Service
+	}
+
+	return trustMeta
 }
 
 // resolveDID resolves a did:web identifier to a DID document.
@@ -385,6 +463,14 @@ func (r *DIDWebRegistry) jwksMatch(jwk1, jwk2 map[string]interface{}) bool {
 // SupportedResourceTypes returns the resource types this registry can handle.
 func (r *DIDWebRegistry) SupportedResourceTypes() []string {
 	return []string{"jwk"} // x5c support could be added later
+}
+
+// SupportsResolutionOnly returns true for did:web registry.
+// The did:web method supports resolution-only requests where clients can
+// retrieve DID documents without validating a specific key binding.
+// This enables use as a DID resolver via the AuthZEN protocol.
+func (r *DIDWebRegistry) SupportsResolutionOnly() bool {
+	return true
 }
 
 // Info returns metadata about this registry.

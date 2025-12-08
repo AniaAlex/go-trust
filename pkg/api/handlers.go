@@ -59,11 +59,18 @@ func StatusHandler(serverCtx *ServerContext) gin.HandlerFunc {
 // @Description is correctly bound to a name (in subject.id) using configured trust registries
 // @Description (ETSI TS 119612 TSLs, OpenID Federation, DID methods, etc.).
 // @Description
+// @Description ## Full Trust Evaluation
 // @Description The request MUST have:
 // @Description - subject.type = "key" and subject.id = the name to validate
 // @Description - resource.type = "jwk" or "x5c" with resource.key containing the public key/certificates
 // @Description - resource.id MUST equal subject.id
 // @Description - action (optional) with name = the role being validated
+// @Description
+// @Description ## Resolution-Only Requests
+// @Description When resource.type or resource.key are omitted, the request is treated as resolution-only.
+// @Description Registries that support resolution-only mode (did:web, did:key, OpenID Federation) will
+// @Description return decision=true with trust_metadata containing the resolved DID document or entity
+// @Description configuration. ETSI TSL registries do not support resolution-only mode.
 // @Tags AuthZEN
 // @Accept json
 // @Produce json
@@ -152,8 +159,22 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 	}
 }
 
-// legacyEvaluate implements the old direct CertPool validation for backward compatibility
+// legacyEvaluate implements the old direct CertPool validation for backward compatibility.
+// NOTE: This legacy implementation does NOT support resolution-only requests.
+// For resolution-only support, use the RegistryManager architecture with appropriate registries.
 func legacyEvaluate(serverCtx *ServerContext, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
+	// Check if this is a resolution-only request (not supported in legacy mode)
+	if req.IsResolutionOnlyRequest() {
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"error": "resolution-only requests not supported in legacy mode; configure RegistryManager with appropriate registries",
+				},
+			},
+		}, nil
+	}
+
 	// Validate request against AuthZEN Trust Registry Profile
 	if err := req.Validate(); err != nil {
 		return &authzen.EvaluationResponse{

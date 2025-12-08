@@ -31,12 +31,31 @@ type TrustRegistry interface {
 	// Returns an EvaluationResponse with decision=true if the binding is trusted,
 	// decision=false otherwise. Should not return an error for "not found" cases;
 	// instead return decision=false with appropriate context.
+	//
+	// For resolution-only requests (where IsResolutionOnlyRequest() returns true),
+	// registries that support resolution-only mode should return decision=true
+	// with the resolved trust_metadata (DID document, entity configuration, etc.)
+	// in the response context.
 	Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error)
 
 	// SupportedResourceTypes returns the resource.type values this registry
 	// can handle. Use "*" to indicate support for all types.
 	// Examples: ["x5c", "jwk"], ["entity_configuration"], ["did:web"]
 	SupportedResourceTypes() []string
+
+	// SupportsResolutionOnly returns true if this registry supports resolution-only
+	// requests. Resolution-only requests have no resource.type or resource.key and
+	// are used to retrieve trust metadata (DID documents, entity configurations, etc.)
+	// without validating a specific name-to-key binding.
+	//
+	// Registries that return true MUST:
+	// - Accept EvaluationRequests where IsResolutionOnlyRequest() returns true
+	// - Return the resolved trust metadata in response.Context.TrustMetadata
+	// - Return decision=true if resolution succeeds, decision=false otherwise
+	//
+	// Registries that return false SHOULD reject resolution-only requests
+	// with decision=false and an appropriate reason in context.
+	SupportsResolutionOnly() bool
 
 	// Info returns metadata about this registry instance
 	Info() RegistryInfo

@@ -129,6 +129,13 @@ func (r *TSLRegistry) SupportedResourceTypes() []string {
 	return []string{"x5c", "jwk"}
 }
 
+// SupportsResolutionOnly returns false for ETSI TSL registry.
+// ETSI TSL does not support resolution-only requests - it requires
+// an X.509 certificate chain to validate against the trust status lists.
+func (r *TSLRegistry) SupportsResolutionOnly() bool {
+	return false
+}
+
 // Info returns metadata about this registry
 func (r *TSLRegistry) Info() registry.RegistryInfo {
 	trustAnchors := make([]string, 0)
