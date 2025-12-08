@@ -101,9 +101,10 @@ func main() {
 	// TODO: Make resolution strategy configurable (currently defaults to FirstMatch)
 	registryMgr := registry.NewRegistryManager(registry.FirstMatch, 30*time.Second)
 
-	// Create ETSI TSL registry wrapping the pipeline context
-	// Note: This shares the same context as the legacy PipelineContext for backward compatibility
-	tslRegistry := etsi.NewTSLRegistry(serverCtx.PipelineContext, "ETSI-TSL")
+	// Create ETSI TSL registry backed by the pipeline context
+	// The pipeline context provides GetCertPool(), GetTSLs(), GetTSLCount() methods
+	// that the registry uses to access trust data updated by the background pipeline
+	tslRegistry := etsi.NewPipelineBackedRegistry(serverCtx.PipelineContext, "ETSI-TSL")
 	registryMgr.Register(tslRegistry)
 
 	serverCtx.RegistryManager = registryMgr

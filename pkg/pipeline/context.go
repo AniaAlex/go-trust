@@ -219,3 +219,27 @@ func NewContext() *Context {
 		Data:     make(map[string]any),
 	}
 }
+
+// GetCertPool returns the certificate pool from the context.
+// This implements the PipelineContextProvider interface used by etsi.PipelineBackedRegistry.
+func (ctx *Context) GetCertPool() *x509.CertPool {
+	return ctx.CertPool
+}
+
+// GetTSLs returns all TSLs from the context as a slice.
+// This implements the PipelineContextProvider interface used by etsi.PipelineBackedRegistry.
+func (ctx *Context) GetTSLs() []*etsi119612.TSL {
+	if ctx.TSLs == nil {
+		return nil
+	}
+	return ctx.TSLs.ToSlice()
+}
+
+// GetTSLCount returns the number of loaded TSLs.
+// This implements the PipelineContextProvider interface used by etsi.PipelineBackedRegistry.
+func (ctx *Context) GetTSLCount() int {
+	if ctx.TSLs == nil {
+		return 0
+	}
+	return ctx.TSLs.Size()
+}
