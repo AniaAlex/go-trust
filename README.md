@@ -148,12 +148,85 @@ pkg/registry/
 ├── strategies.go        # Resolution strategy implementations
 ├── circuit_breaker.go   # Failure handling
 ├── etsi/
-│   └── tsl_registry.go  # ETSI TSL implementation
+│   ├── registry.go          # Standalone ETSI TSL registry (no pipeline dependency)
+│   └── pipeline_backed.go   # Pipeline-backed registry for server use
+├── didweb/
+│   └── didweb_registry.go   # DID Web implementation
 └── oidfed/
-    └── oidfed_registry.go # OpenID Federation implementation
+    └── oidfed_registry.go   # OpenID Federation implementation
 ```
 
 For detailed architecture documentation, see [ARCHITECTURE-MULTI-REGISTRY.md](./docs/ARCHITECTURE-MULTI-REGISTRY.md).
+
+### ETSI TSL Registry
+
+The ETSI TSL registry validates X.509 certificates against ETSI TS 119 612 Trust Status Lists. It provides two modes of operation:
+
+#### Standalone Mode (TSLRegistry)
+
+Use `TSLRegistry` for standalone applications that don't need background pipeline updates. It loads trust data directly from local files or remote URLs.
+
+```go
+import "github.com/SUNET/go-trust/pkg/registry/etsi"
+
+// Load from local PEM certificate bundle (recommended for production)
+reg, err := etsi.NewTSLRegistry(etsi.TSLConfig{
+    Name:       "EU-TSL",
+    CertBundle: "/var/lib/go-trust/eu-trusted-certs.pem",
+})
+
+// Load from local TSL XML files
+reg, err := etsi.NewTSLRegistry(etsi.TSLConfig{
+    Name:     "EU-TSL",
+    TSLFiles: []string{"/var/lib/go-trust/eu-lotl.xml"},
+})
+
+// Load from remote URL with reference following (for tools)
+reg, err := etsi.NewTSLRegistry(etsi.TSLConfig{
+    Name:               "EU-LOTL",
+    TSLURLs:            []string{"https://ec.europa.eu/tools/lotl/eu-lotl.xml"},
+    AllowNetworkAccess: true,
+    FollowRefs:         true,
+    MaxRefDepth:        3,
+})
+```
+
+**Configuration Options:**
+
+| Option | Description |
+|--------|-------------|
+| `Name` | Human-readable identifier |
+| `CertBundle` | Path to PEM file with trusted certificates |
+| `TSLFiles` | List of local TSL XML file paths |
+| `TSLURLs` | List of URLs to fetch TSLs from |
+| `AllowNetworkAccess` | Whether to allow http(s) URLs (default: false) |
+| `FollowRefs` | Whether to follow TSL references (default: false) |
+| `MaxRefDepth` | Maximum depth for reference following (default: 3) |
+
+#### Server Mode (PipelineBackedRegistry)
+
+Use `PipelineBackedRegistry` when running the go-trust server with background TSL updates managed by the pipeline system.
+
+```go
+import (
+    "github.com/SUNET/go-trust/pkg/api"
+    "github.com/SUNET/go-trust/pkg/pipeline"
+    "github.com/SUNET/go-trust/pkg/registry/etsi"
+)
+
+// Create server context with pipeline
+serverCtx := api.NewServerContext(nil)
+serverCtx.PipelineContext = &pipeline.Context{}
+
+// Create pipeline-backed registry (reads from pipeline context)
+tslRegistry := etsi.NewPipelineBackedRegistry(serverCtx.PipelineContext, "ETSI-TSL")
+registryMgr.Register(tslRegistry)
+
+// Start background pipeline updates
+api.StartBackgroundUpdater(pl, serverCtx, 5*time.Minute)
+```
+
+The `PipelineBackedRegistry` reads trust data from the `pipeline.Context`, which is automatically updated by the background pipeline. This ensures the registry always has fresh TSL data without blocking on network requests during certificate validation.
 
 ### OpenID Federation Registry
 

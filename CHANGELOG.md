@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Standalone AuthZEN client library (`pkg/authzenclient/`)
+  - HTTP client for AuthZEN PDPs with discovery support
+  - Methods: `Discover()`, `Evaluate()`, `Resolve()`, `EvaluateX5C()`, `EvaluateJWK()`
+  - Can be imported independently in other Go projects
+
+- Unified ETSI TSL Registry (`pkg/registry/etsi/`)
+  - `TSLRegistry`: Standalone registry that loads from PEM bundles, local TSL files, or URLs
+  - `PipelineBackedRegistry`: Server mode registry backed by pipeline context
+  - `PipelineContextProvider` interface for decoupled pipeline integration
+  - `AllowNetworkAccess` flag to control network URL access
+  - `FollowRefs` and `MaxRefDepth` for TSL reference following
+  - Comprehensive package documentation (`doc.go`)
+
+- Architecture documentation for AuthZEN/TSL separation (`docs/ARCHITECTURE_SEPARATION_ANALYSIS.md`)
+
+### Changed
+
+- Refactored ETSI registry to eliminate direct pipeline dependency
+  - Old `tsl_registry.go` replaced with unified `registry.go`
+  - `pipeline.Context` now implements `PipelineContextProvider` interface
+  - Added `GetCertPool()`, `GetTSLs()`, `GetTSLCount()` methods to `pipeline.Context`
+
+- Updated `main.go` to use `PipelineBackedRegistry` instead of old `TSLRegistry`
+
+- Enhanced README.md with:
+  - ETSI TSL Registry section documenting both standalone and server modes
+  - Updated package structure diagram
+  - Configuration options table for TSLConfig
+
+### Removed
+
+- Removed deprecated `tsl_registry.go` (replaced by `registry.go`)
+- Removed deprecated `local_registry.go` (merged into `registry.go`)
+
+---
+
+## [Previous]
+
+### Added
+
 - Comprehensive developer tooling and documentation
   - Enhanced Makefile with 30+ targets for development workflows
   - VS Code integration (settings, launch configs, tasks, recommended extensions)
