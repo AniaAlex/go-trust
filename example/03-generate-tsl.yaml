@@ -1,0 +1,99 @@
+# TSL Generation Example
+#
+# This example demonstrates how to generate a Trust Service List (TSL)
+# from YAML metadata files. Useful for:
+# - Creating custom TSLs for internal trust anchors
+# - Generating TSLs for testing and development
+# - Building organization-specific trust lists
+#
+# Usage:
+#   gt --no-server example/03-generate-tsl.yaml
+
+# Step 1: Generate a TSL from the metadata directory structure
+#
+# The directory structure should follow this convention:
+#   example-tsl/
+#   ├── scheme.yaml                    # TSL scheme metadata
+#   └── providers/
+#       └── example-provider/
+#           ├── provider.yaml          # Trust service provider info
+#           ├── example.yaml           # Service metadata
+#           └── example.pem            # Certificate(s)
+#
+- generate:
+    - ./example-tsl
+
+# Step 2: Log information about the generated TSL
+- log:
+    - "Generated TSL with %d providers"
+
+# Step 3: Extract certificates from the generated TSL
+- select:
+    - all
+
+# Step 4: Publish the generated TSL (unsigned)
+- publish:
+    - ./output/generated
+
+# Step 5: Publish a signed copy (optional)
+# Uncomment and provide your signing credentials:
+# - publish:
+#     - ./output/generated-signed
+#     - /path/to/signing-cert.pem
+#     - /path/to/signing-key.pem
+
+# Step 6: Transform to HTML for review
+- transform:
+    - embedded:tsl-to-html.xslt
+    - ./output/generated-html
+    - html
+
+# Step 7: Generate index page
+- generate_index:
+    - ./output/generated-html
+    - "Generated Trust Service List"
+
+# Step 8: Log completion
+- log:
+    - "TSL generation complete. Output in ./output/generated/"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Metadata File Formats
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# scheme.yaml - TSL scheme information:
+# ─────────────────────────────────────
+# operatorNames:
+#   - language: en
+#     value: "Trust List Operator"
+# type: "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists"
+# sequenceNumber: 1
+#
+# provider.yaml - Trust service provider:
+# ────────────────────────────────────────
+# names:
+#   - language: en
+#     value: "Example Trust Service Provider"
+# address:
+#   postal:
+#     streetAddress: "Example Street 123"
+#     locality: "Example City"
+#     postalCode: "12345"
+#     countryName: "SE"
+#   electronic:
+#     - "https://example.com"
+#     - "mailto:contact@example.com"
+# tradeName:
+#   - language: en
+#     value: "Example Trust Services AB"
+# informationURI:
+#   - language: en
+#     value: "https://example.com/info"
+#
+# service.yaml - Service metadata:
+# ────────────────────────────────
+# serviceNames:
+#   - language: en
+#     value: "Example Certificate Service"
+# serviceType: "http://uri.etsi.org/TrstSvc/Svctype/CA/QC"
+# status: "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted/"

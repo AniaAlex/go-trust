@@ -1,0 +1,81 @@
+# Server Mode Pipeline Example
+#
+# This example demonstrates a comprehensive pipeline for running go-trust
+# as an API server. It loads the EU TSL tree, applies filtering, generates
+# HTML views, and makes data available via the REST API.
+#
+# Usage:
+#   gt --pipeline example/02-server-pipeline.yaml
+#
+# The server will:
+# - Execute this pipeline on startup
+# - Re-run periodically based on --frequency (default: 5m)
+# - Serve the AuthZEN evaluation API at /evaluation
+# - Serve Swagger UI at /swagger/index.html
+# - Serve .well-known/authzen-configuration for discovery
+
+# Step 1: Configure fetch options for comprehensive TSL tree loading
+- set-fetch-options:
+    - max-depth:2                    # Follow references to load national TSLs
+    - timeout:60s                    # Longer timeout for tree processing
+    - user-agent:Go-Trust-Server/1.0
+
+# Step 2: Load the EU List of Lists (LOTL)
+# This loads the root TSL and follows references to national TSLs
+- load:
+    - https://ec.europa.eu/tools/lotl/eu-lotl.xml
+
+# Step 3: Log TSL tree information
+- log:
+    - "Loaded TSL tree: %d trust service providers across %d TSLs"
+
+# Step 4: Create the primary certificate pool for API validation
+# This pool is used by the /evaluation endpoint
+- select:
+    - status:http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted
+    - service-type:http://uri.etsi.org/TrstSvc/Svctype/CA/QC
+
+# Step 5: Transform TSLs to HTML for web viewing
+- transform:
+    - embedded:tsl-to-html.xslt
+    - ./output/html
+    - html
+
+# Step 6: Generate an index page for HTML files
+- generate_index:
+    - ./output/html
+    - "EU Trusted Lists - HTML View"
+
+# Step 7: Publish TSLs in territory-based tree structure
+- publish:
+    - ./output/tsl
+    - tree:territory
+
+# Step 8: Log API readiness
+- log:
+    - "API ready. Certificate pool contains %d certificates."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration Options (command-line flags)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Basic server options:
+#   --host 0.0.0.0            Listen on all interfaces
+#   --port 6001               Server port
+#   --frequency 5m            Pipeline refresh interval
+#
+# External URL (for .well-known discovery behind reverse proxy):
+#   --external-url https://pdp.example.com
+#
+# Logging:
+#   --log-level debug         Enable debug logging
+#   --log-format json         JSON output for log aggregation
+#
+# Example deployment command:
+#   gt --pipeline example/02-server-pipeline.yaml \
+#      --host 0.0.0.0 \
+#      --port 6001 \
+#      --external-url https://pdp.example.com \
+#      --frequency 15m \
+#      --log-level info \
+#      --log-format json

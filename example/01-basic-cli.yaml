@@ -1,0 +1,56 @@
+# Basic CLI Processing Example
+#
+# This example demonstrates one-shot TSL processing using go-trust
+# as a command-line tool. Useful for:
+# - Batch processing in CI/CD pipelines
+# - Scheduled cron jobs for report generation
+# - One-time transformations without server overhead
+#
+# Usage:
+#   gt --no-server example/01-basic-cli.yaml
+#
+# With debug logging:
+#   gt --no-server --log-level debug example/01-basic-cli.yaml
+
+# Step 1: Configure fetch options
+- set-fetch-options:
+    - max-depth:0              # Don't follow references (faster for single TSL)
+    - timeout:30s
+    - user-agent:Go-Trust-CLI/1.0
+
+# Step 2: Load a TSL from the EU trusted list
+- load:
+    - https://ec.europa.eu/tools/lotl/eu-lotl.xml
+
+# Step 3: Log progress
+- log:
+    - "Loaded TSL with %d trust service providers"
+
+# Step 4: Extract all certificates to the certificate pool
+- select:
+    - all
+
+# Step 5: Transform TSL to HTML for viewing
+- transform:
+    - embedded:tsl-to-html.xslt    # Use the bundled XSLT stylesheet
+    - ./output/html                 # Output directory
+    - html                          # File extension
+
+# Step 6: Generate an index page linking all HTML files
+- generate_index:
+    - ./output/html
+    - "Trust Service List - HTML View"
+
+# Step 7: Publish the raw TSL XML
+- publish:
+    - ./output/xml
+
+# Step 8: Log completion
+- log:
+    - "Processing complete. Files in ./output/"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Alternative: Process a local TSL file instead of a URL
+# ─────────────────────────────────────────────────────────────────────────────
+# - load:
+#     - /path/to/local/tsl.xml

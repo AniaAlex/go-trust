@@ -1,125 +1,178 @@
-# TSL Pipeline Examples
+# Go-Trust Examples
 
 This directory contains example configurations for the go-trust TSL pipeline processing system.
 
-## YAML Configuration Format
-
-Pipeline configurations are defined in YAML with a sequence of steps. Each step has a function name (like `load` or `transform`) and a list of arguments:
-
-```yaml
-# Example pipeline structure
-- function-name:
-    - argument1
-    - argument2
-    
-- another-function:
-    - argument
-```
-
-Note that there is **no `steps:` key** at the root level - the pipeline is a direct list of steps.
-
-### Configuration Guidelines
-
-IMPORTANT: Pipeline YAML files should:
-- ONLY contain pipeline steps
-- NOT include configuration such as `debug: true`
-- NOT include any global configuration parameters
-
-All configuration should be provided through command-line arguments when running the pipeline:
+## Quick Start
 
 ```bash
-# Example: Enable debug mode through command line
-gt --debug example/basic-usage.yaml
+# Run as CLI tool (one-shot processing)
+gt --no-server example/01-basic-cli.yaml
+
+# Run as API server
+gt --pipeline example/02-server-pipeline.yaml
+
+# Generate a TSL from metadata
+gt --no-server example/03-generate-tsl.yaml
 ```
 
 ## Example Files
 
-### 1. `basic-usage.yaml`
+| File | Description | Use Case |
+|------|-------------|----------|
+| `01-basic-cli.yaml` | Basic command-line processing | CI/CD, cron jobs, one-time transformations |
+| `02-server-pipeline.yaml` | Full server mode with API | Production API server, AuthZEN PDP |
+| `03-generate-tsl.yaml` | Generate TSL from YAML metadata | Creating custom trust lists |
+| `didweb-registry-example.go` | Go code using did:web registry | Programmatic did:web resolution |
 
-A simple example showing the core functionality:
+## Pipeline YAML Format
 
-- Loading a TSL from a URL
-- Setting basic fetch options
-- Creating a certificate pool
-- Publishing the TSL to a local directory
-
-### 2. `tsl-tree-publishing.yaml`
-
-Demonstrates tree structure publishing with filtering:
-
-- Loading a TSL with reference depth control
-- Filtering by territory and service type
-- Publishing with territory-based and index-based directory structures
-- Creating filtered certificate pools
-
-### 3. `api-and-html.yaml`
-
-Shows integration with the API and HTML transformation:
-
-- Loading TSLs for API access
-- Transforming TSLs to HTML with XSLT
-- Generating index pages
-- Creating certificate pools with different filtering criteria
-
-### 4. `custom-tsl-generation.yaml`
-
-Demonstrates generating TSLs from metadata files:
-
-- Creating TSLs from directory-based metadata
-- Validating generated TSLs
-- Optionally signing TSLs
-- Publishing in different formats
-
-## Using These Examples
-
-To run these examples, use the gt pipeline command:
-
-```bash
-gt example/basic-usage.yaml
-```
-
-## Common Pipeline Steps
-
-| Step Name | Description | Example Usage |
-|-----------|-------------|--------------|
-| `load` | Load a TSL from a URL or file | `- load: [https://example.com/tsl.xml]` |
-| `set-fetch-options` | Configure fetch depth and filters | `- set-fetch-options: [max-depth:2, timeout:60s]` |
-| `transform` | Apply an XSLT transformation | `- transform: [stylesheet.xslt, ./output, html]` |
-| `publish` | Publish TSLs to a directory | `- publish: [./output]` |
-| `log` | Log information | `- log: ["Loaded %d TSLs"]` |
-| `select` | Extract certificates | `- select: [all]` |
-| `generate` | Generate a TSL from metadata | `- generate: [./metadata-dir]` |
-| `generate_index` | Create an index page | `- generate_index: [./output, "Title"]` |
-
-## Tree Structure Publishing
-
-When publishing, you can maintain the tree structure using these formats:
+Pipeline configurations are YAML files containing a sequence of steps. Each step specifies a function and its arguments:
 
 ```yaml
-# Territory-based directories
-- publish:
-    - ./output
-    - tree:territory
+# Pipeline is a direct list of steps (no 'steps:' key)
+- function-name:
+    - argument1
+    - argument2
 
-# Index-based directories
-- publish:
-    - ./output
-    - tree:index
+- another-function:
+    - argument
 ```
 
-## Certificate Selection and Filtering
+## Available Pipeline Functions
+
+| Function | Description | Arguments |
+|----------|-------------|-----------|
+| `load` | Load TSL from URL or file | `url` or `file-path` |
+| `set-fetch-options` | Configure fetch behavior | `max-depth:N`, `timeout:Ns`, `user-agent:string` |
+| `select` | Build certificate pool | `all`, `status:uri`, `service-type:uri` |
+| `transform` | Apply XSLT transformation | `xslt-path`, `output-dir`, `extension` |
+| `generate_index` | Create HTML index page | `directory`, `title` |
+| `publish` | Write TSL to directory | `output-dir`, optionally `cert.pem`, `key.pem` |
+| `generate` | Create TSL from metadata | `metadata-dir` |
+| `log` | Log a message | `format-string` |
+| `echo` | Echo arguments (debug) | `args...` |
+
+### Function Details
+
+#### `load`
+
+```yaml
+- load:
+    - https://ec.europa.eu/tools/lotl/eu-lotl.xml
+```
+
+#### `set-fetch-options`
+
+```yaml
+- set-fetch-options:
+    - max-depth:2              # Follow TSL references N levels deep
+    - timeout:60s              # HTTP request timeout
+    - user-agent:MyApp/1.0     # HTTP User-Agent header
+```
+
+#### `select`
 
 ```yaml
 # Select all certificates
 - select:
     - all
 
-# Filter by service type
+# Filter by service status and type
 - select:
-    - service-type:http://uri.etsi.org/TrstSvc/Svctype/CA/QC
-    
-# Filter by status with AND logic
-- select:
-    - status-logic:and
     - status:http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted
+    - service-type:http://uri.etsi.org/TrstSvc/Svctype/CA/QC
+```
+
+#### `transform`
+
+```yaml
+- transform:
+    - embedded:tsl-to-html.xslt    # Use bundled stylesheet
+    - ./output/html                 # Output directory
+    - html                          # File extension
+```
+
+#### `publish`
+
+```yaml
+# Publish without signing
+- publish:
+    - ./output/xml
+
+# Publish with XML-DSIG signature
+- publish:
+    - ./output/signed
+    - /path/to/cert.pem
+    - /path/to/key.pem
+
+# Publish with tree structure
+- publish:
+    - ./output/tree
+    - tree:territory               # or tree:index
+```
+
+#### `generate`
+
+```yaml
+- generate:
+    - ./metadata-directory
+```
+
+## TSL Generation Metadata Structure
+
+To generate a TSL, create a directory with this structure:
+
+```text
+my-tsl/
+├── scheme.yaml                    # Required: TSL scheme info
+└── providers/
+    └── my-provider/
+        ├── provider.yaml          # Required: Provider info
+        ├── service.yaml           # Required: Service metadata
+        └── cert.pem               # Required: Certificate(s)
+```
+
+See `example-tsl/` for a complete example.
+
+## Command-Line Options
+
+```bash
+# CLI mode (one-shot processing, no server)
+gt --no-server pipeline.yaml
+
+# Server mode
+gt --pipeline pipeline.yaml [options]
+
+# Common options
+  --host 0.0.0.0              # Listen address
+  --port 6001                 # Server port
+  --frequency 5m              # Pipeline refresh interval
+  --external-url URL          # External URL for .well-known discovery
+  --log-level debug           # Log level: debug, info, warn, error
+  --log-format json           # Log format: text, json
+```
+
+## did:web Registry Example
+
+The `didweb-registry-example.go` file demonstrates programmatic use of the did:web registry for resolving Decentralized Identifiers:
+
+```go
+// Create a did:web registry
+registry, _ := didweb.NewDIDWebRegistry(didweb.Config{
+    Timeout:     30 * time.Second,
+    Description: "DID Web Resolver",
+})
+
+// Evaluate an AuthZEN request
+resp, _ := registry.Evaluate(ctx, &authzen.EvaluationRequest{
+    Subject: authzen.Subject{
+        Type: "key",
+        ID:   "did:web:example.com",
+    },
+    Resource: authzen.Resource{
+        Type: "jwk",
+        ID:   "did:web:example.com",
+        Key:  []interface{}{jwkData},
+    },
+})
 ```
