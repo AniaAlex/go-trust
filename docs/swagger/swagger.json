@@ -1,0 +1,438 @@
+{
+    "schemes": [
+        "http",
+        "https"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "Trust decision engine for ETSI TS 119612 Trust Status Lists (TSLs)\n\nGo-Trust provides AuthZEN-based trust decisions for X.509 certificates using ETSI trust status lists.\nIt processes TSLs, validates certificates, and provides health/metrics endpoints for production deployment.",
+        "title": "Go-Trust API",
+        "termsOfService": "https://github.com/sirosfoundation/go-trust",
+        "contact": {
+            "name": "sirosfoundation",
+            "url": "https://github.com/sirosfoundation/go-trust",
+            "email": "noreply@sunet.se"
+        },
+        "license": {
+            "name": "BSD-2-Clause",
+            "url": "https://opensource.org/licenses/BSD-2-Clause"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:6001",
+    "basePath": "/",
+    "paths": {
+        "/.well-known/authzen-configuration": {
+            "get": {
+                "description": "Returns Policy Decision Point metadata according to Section 9 of the AuthZEN specification\nThis endpoint provides service discovery information including supported endpoints and capabilities\nper RFC 8615 well-known URI registration",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "AuthZEN"
+                ],
+                "summary": "AuthZEN PDP discovery endpoint",
+                "responses": {
+                    "200": {
+                        "description": "PDP metadata",
+                        "schema": {
+                            "$ref": "#/definitions/authzen.PDPMetadata"
+                        }
+                    }
+                }
+            }
+        },
+        "/evaluation": {
+            "post": {
+                "description": "Evaluates whether a name-to-key binding is trusted according to loaded trust registries\n\nThis endpoint implements the AuthZEN Trust Registry Profile as specified in\ndraft-johansson-authzen-trust. It validates that a public key (in resource.key)\nis correctly bound to a name (in subject.id) using configured trust registries\n(ETSI TS 119612 TSLs, OpenID Federation, DID methods, etc.).\n\n## Full Trust Evaluation\nThe request MUST have:\n- subject.type = \"key\" and subject.id = the name to validate\n- resource.type = \"jwk\" or \"x5c\" with resource.key containing the public key/certificates\n- resource.id MUST equal subject.id\n- action (optional) with name = the role being validated\n\n## Resolution-Only Requests\nWhen resource.type or resource.key are omitted, the request is treated as resolution-only.\nRegistries that support resolution-only mode (did:web, did:key, OpenID Federation) will\nreturn decision=true with trust_metadata containing the resolved DID document or entity\nconfiguration. ETSI TSL registries do not support resolution-only mode.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "AuthZEN"
+                ],
+                "summary": "Evaluate trust decision (AuthZEN Trust Registry Profile)",
+                "parameters": [
+                    {
+                        "description": "AuthZEN Trust Registry Evaluation Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/authzen.EvaluationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Trust decision (decision=true for trusted, false for untrusted)",
+                        "schema": {
+                            "$ref": "#/definitions/authzen.EvaluationResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request format or validation error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/healthz": {
+            "get": {
+                "description": "Returns OK if the server is running and able to handle requests",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Liveness check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.HealthResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/info": {
+            "get": {
+                "description": "Returns detailed summaries of all loaded Trust Status Lists\n\nDEPRECATED: This endpoint is deprecated. Use GET /tsls instead.\n\nThis endpoint provides comprehensive information about each TSL including:\n- Territory code\n- Sequence number\n- Issue date\n- Next update date\n- Number of services",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Status"
+                ],
+                "summary": "Get TSL information (DEPRECATED - use GET /tsls)",
+                "deprecated": true,
+                "responses": {
+                    "200": {
+                        "description": "tsl_summaries",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/readyz": {
+            "get": {
+                "description": "Returns ready status if pipeline has been processed and TSLs are loaded\n\nQuery Parameters:\n- verbose=true: Include detailed TSL information in the response",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Readiness check",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "Include detailed TSL information",
+                        "name": "verbose",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Service is ready",
+                        "schema": {
+                            "$ref": "#/definitions/api.ReadinessResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service is not ready",
+                        "schema": {
+                            "$ref": "#/definitions/api.ReadinessResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/status": {
+            "get": {
+                "description": "Returns the current server status including TSL count and last processing time\n\nDEPRECATED: This endpoint is deprecated. Use GET /readyz for health checks.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Status"
+                ],
+                "summary": "Get server status (DEPRECATED - use GET /readyz)",
+                "deprecated": true,
+                "responses": {
+                    "200": {
+                        "description": "tsl_count, last_processed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/tsls": {
+            "get": {
+                "description": "Returns comprehensive information about all loaded Trust Status Lists\n\nThis is the primary endpoint for retrieving TSL metadata including:\n- Territory codes\n- Sequence numbers\n- Issue and next update dates\n- Service counts per TSL\n- Last processing timestamp",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "TSLs"
+                ],
+                "summary": "List Trust Status Lists",
+                "responses": {
+                    "200": {
+                        "description": "count, last_updated, tsls",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "api.HealthResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ReadinessResponse": {
+            "type": "object",
+            "properties": {
+                "last_processed": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ready": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "tsl_count": {
+                    "type": "integer"
+                },
+                "tsls": {
+                    "description": "Only included with ?verbose=true",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                }
+            }
+        },
+        "authzen.Action": {
+            "description": "Action (role) in an AuthZEN trust evaluation request",
+            "type": "object",
+            "properties": {
+                "name": {
+                    "description": "The role name",
+                    "type": "string",
+                    "example": "http://ec.europa.eu/NS/wallet-provider"
+                }
+            }
+        },
+        "authzen.EvaluationRequest": {
+            "description": "AuthZEN trust evaluation request (draft-johansson-authzen-trust)",
+            "type": "object",
+            "properties": {
+                "action": {
+                    "description": "Optional role constraint",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/authzen.Action"
+                        }
+                    ]
+                },
+                "context": {
+                    "description": "Optional context (MUST NOT be critical)",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "resource": {
+                    "description": "The public key to be validated",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/authzen.Resource"
+                        }
+                    ]
+                },
+                "subject": {
+                    "description": "The name to be bound to the key",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/authzen.Subject"
+                        }
+                    ]
+                }
+            }
+        },
+        "authzen.EvaluationResponse": {
+            "description": "AuthZEN evaluation response with trust decision",
+            "type": "object",
+            "properties": {
+                "context": {
+                    "description": "Optional context with decision details",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/authzen.EvaluationResponseContext"
+                        }
+                    ]
+                },
+                "decision": {
+                    "description": "Whether the name-to-key binding is authorized",
+                    "type": "boolean",
+                    "example": true
+                }
+            }
+        },
+        "authzen.EvaluationResponseContext": {
+            "description": "Context information for evaluation response",
+            "type": "object",
+            "properties": {
+                "id": {
+                    "description": "Optional identifier for the decision",
+                    "type": "string",
+                    "example": "decision-123"
+                },
+                "reason": {
+                    "description": "Reason information (user or admin)",
+                    "type": "object"
+                },
+                "trust_metadata": {
+                    "description": "TrustMetadata contains the resolved trust metadata for the subject.\nFor DID resolution: contains the DID Document\nFor OpenID Federation: contains the Entity Configuration\nThis field is set when trust_metadata is requested or for resolution-only requests.",
+                    "type": "object"
+                }
+            }
+        },
+        "authzen.PDPMetadata": {
+            "description": "Policy Decision Point metadata for service discovery",
+            "type": "object",
+            "properties": {
+                "access_evaluation_endpoint": {
+                    "description": "REQUIRED. URL of Access Evaluation API endpoint",
+                    "type": "string",
+                    "example": "https://pdp.example.com/evaluation"
+                },
+                "access_evaluations_endpoint": {
+                    "description": "OPTIONAL. URL of Access Evaluations API endpoint (for batch requests)",
+                    "type": "string",
+                    "example": "https://pdp.example.com/evaluations"
+                },
+                "capabilities": {
+                    "description": "OPTIONAL. JSON array containing a list of registered IANA URNs referencing PDP\nspecific capabilities.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "policy_decision_point": {
+                    "description": "REQUIRED. The Policy Decision Point identifier, which is a URL that uses the\n\"https\" scheme and has no query or fragment components. This is used to prevent\nPDP mix-up attacks.",
+                    "type": "string",
+                    "example": "https://pdp.example.com"
+                },
+                "search_action_endpoint": {
+                    "description": "OPTIONAL. URL of Search API endpoint for action entities",
+                    "type": "string",
+                    "example": "https://pdp.example.com/search/action"
+                },
+                "search_resource_endpoint": {
+                    "description": "OPTIONAL. URL of Search API endpoint for resource entities",
+                    "type": "string",
+                    "example": "https://pdp.example.com/search/resource"
+                },
+                "search_subject_endpoint": {
+                    "description": "OPTIONAL. URL of Search API endpoint for subject entities",
+                    "type": "string",
+                    "example": "https://pdp.example.com/search/subject"
+                },
+                "signed_metadata": {
+                    "description": "OPTIONAL. A JWT containing metadata parameters about the protected resource as claims.\nThis provides signed metadata that takes precedence over plain JSON metadata.",
+                    "type": "string"
+                }
+            }
+        },
+        "authzen.Resource": {
+            "description": "Resource (public key) in an AuthZEN trust evaluation request",
+            "type": "object",
+            "properties": {
+                "id": {
+                    "description": "MUST match subject.id",
+                    "type": "string",
+                    "example": "did:example:123"
+                },
+                "key": {
+                    "description": "Public key data (JWK object or x5c array)",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "type": {
+                    "description": "MUST be \"jwk\" or \"x5c\"",
+                    "type": "string",
+                    "example": "x5c"
+                }
+            }
+        },
+        "authzen.Subject": {
+            "description": "Subject in an AuthZEN trust evaluation request",
+            "type": "object",
+            "properties": {
+                "id": {
+                    "description": "The name bound to the public key",
+                    "type": "string",
+                    "example": "did:example:123"
+                },
+                "type": {
+                    "description": "MUST be \"key\"",
+                    "type": "string",
+                    "example": "key"
+                }
+            }
+        }
+    },
+    "tags": [
+        {
+            "description": "Health check and readiness endpoints for Kubernetes and monitoring systems",
+            "name": "Health"
+        },
+        {
+            "description": "Server status and TSL information endpoints",
+            "name": "Status"
+        },
+        {
+            "description": "AuthZEN protocol endpoints for trust decision evaluation",
+            "name": "AuthZEN"
+        }
+    ]
+}

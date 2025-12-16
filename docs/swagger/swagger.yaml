@@ -1,0 +1,358 @@
+basePath: /
+definitions:
+  api.HealthResponse:
+    properties:
+      status:
+        type: string
+      timestamp:
+        type: string
+    type: object
+  api.ReadinessResponse:
+    properties:
+      last_processed:
+        type: string
+      message:
+        type: string
+      ready:
+        type: boolean
+      status:
+        type: string
+      timestamp:
+        type: string
+      tsl_count:
+        type: integer
+      tsls:
+        description: Only included with ?verbose=true
+        items:
+          additionalProperties: true
+          type: object
+        type: array
+    type: object
+  authzen.Action:
+    description: Action (role) in an AuthZEN trust evaluation request
+    properties:
+      name:
+        description: The role name
+        example: http://ec.europa.eu/NS/wallet-provider
+        type: string
+    type: object
+  authzen.EvaluationRequest:
+    description: AuthZEN trust evaluation request (draft-johansson-authzen-trust)
+    properties:
+      action:
+        allOf:
+        - $ref: '#/definitions/authzen.Action'
+        description: Optional role constraint
+      context:
+        additionalProperties:
+          type: string
+        description: Optional context (MUST NOT be critical)
+        type: object
+      resource:
+        allOf:
+        - $ref: '#/definitions/authzen.Resource'
+        description: The public key to be validated
+      subject:
+        allOf:
+        - $ref: '#/definitions/authzen.Subject'
+        description: The name to be bound to the key
+    type: object
+  authzen.EvaluationResponse:
+    description: AuthZEN evaluation response with trust decision
+    properties:
+      context:
+        allOf:
+        - $ref: '#/definitions/authzen.EvaluationResponseContext'
+        description: Optional context with decision details
+      decision:
+        description: Whether the name-to-key binding is authorized
+        example: true
+        type: boolean
+    type: object
+  authzen.EvaluationResponseContext:
+    description: Context information for evaluation response
+    properties:
+      id:
+        description: Optional identifier for the decision
+        example: decision-123
+        type: string
+      reason:
+        description: Reason information (user or admin)
+        type: object
+      trust_metadata:
+        description: |-
+          TrustMetadata contains the resolved trust metadata for the subject.
+          For DID resolution: contains the DID Document
+          For OpenID Federation: contains the Entity Configuration
+          This field is set when trust_metadata is requested or for resolution-only requests.
+        type: object
+    type: object
+  authzen.PDPMetadata:
+    description: Policy Decision Point metadata for service discovery
+    properties:
+      access_evaluation_endpoint:
+        description: REQUIRED. URL of Access Evaluation API endpoint
+        example: https://pdp.example.com/evaluation
+        type: string
+      access_evaluations_endpoint:
+        description: OPTIONAL. URL of Access Evaluations API endpoint (for batch requests)
+        example: https://pdp.example.com/evaluations
+        type: string
+      capabilities:
+        description: |-
+          OPTIONAL. JSON array containing a list of registered IANA URNs referencing PDP
+          specific capabilities.
+        items:
+          type: string
+        type: array
+      policy_decision_point:
+        description: |-
+          REQUIRED. The Policy Decision Point identifier, which is a URL that uses the
+          "https" scheme and has no query or fragment components. This is used to prevent
+          PDP mix-up attacks.
+        example: https://pdp.example.com
+        type: string
+      search_action_endpoint:
+        description: OPTIONAL. URL of Search API endpoint for action entities
+        example: https://pdp.example.com/search/action
+        type: string
+      search_resource_endpoint:
+        description: OPTIONAL. URL of Search API endpoint for resource entities
+        example: https://pdp.example.com/search/resource
+        type: string
+      search_subject_endpoint:
+        description: OPTIONAL. URL of Search API endpoint for subject entities
+        example: https://pdp.example.com/search/subject
+        type: string
+      signed_metadata:
+        description: |-
+          OPTIONAL. A JWT containing metadata parameters about the protected resource as claims.
+          This provides signed metadata that takes precedence over plain JSON metadata.
+        type: string
+    type: object
+  authzen.Resource:
+    description: Resource (public key) in an AuthZEN trust evaluation request
+    properties:
+      id:
+        description: MUST match subject.id
+        example: did:example:123
+        type: string
+      key:
+        description: Public key data (JWK object or x5c array)
+        items:
+          type: string
+        type: array
+      type:
+        description: MUST be "jwk" or "x5c"
+        example: x5c
+        type: string
+    type: object
+  authzen.Subject:
+    description: Subject in an AuthZEN trust evaluation request
+    properties:
+      id:
+        description: The name bound to the public key
+        example: did:example:123
+        type: string
+      type:
+        description: MUST be "key"
+        example: key
+        type: string
+    type: object
+host: localhost:6001
+info:
+  contact:
+    email: noreply@sunet.se
+    name: sirosfoundation
+    url: https://github.com/sirosfoundation/go-trust
+  description: |-
+    Trust decision engine for ETSI TS 119612 Trust Status Lists (TSLs)
+
+    Go-Trust provides AuthZEN-based trust decisions for X.509 certificates using ETSI trust status lists.
+    It processes TSLs, validates certificates, and provides health/metrics endpoints for production deployment.
+  license:
+    name: BSD-2-Clause
+    url: https://opensource.org/licenses/BSD-2-Clause
+  termsOfService: https://github.com/sirosfoundation/go-trust
+  title: Go-Trust API
+  version: "1.0"
+paths:
+  /.well-known/authzen-configuration:
+    get:
+      description: |-
+        Returns Policy Decision Point metadata according to Section 9 of the AuthZEN specification
+        This endpoint provides service discovery information including supported endpoints and capabilities
+        per RFC 8615 well-known URI registration
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: PDP metadata
+          schema:
+            $ref: '#/definitions/authzen.PDPMetadata'
+      summary: AuthZEN PDP discovery endpoint
+      tags:
+      - AuthZEN
+  /evaluation:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Evaluates whether a name-to-key binding is trusted according to loaded trust registries
+
+        This endpoint implements the AuthZEN Trust Registry Profile as specified in
+        draft-johansson-authzen-trust. It validates that a public key (in resource.key)
+        is correctly bound to a name (in subject.id) using configured trust registries
+        (ETSI TS 119612 TSLs, OpenID Federation, DID methods, etc.).
+
+        ## Full Trust Evaluation
+        The request MUST have:
+        - subject.type = "key" and subject.id = the name to validate
+        - resource.type = "jwk" or "x5c" with resource.key containing the public key/certificates
+        - resource.id MUST equal subject.id
+        - action (optional) with name = the role being validated
+
+        ## Resolution-Only Requests
+        When resource.type or resource.key are omitted, the request is treated as resolution-only.
+        Registries that support resolution-only mode (did:web, did:key, OpenID Federation) will
+        return decision=true with trust_metadata containing the resolved DID document or entity
+        configuration. ETSI TSL registries do not support resolution-only mode.
+      parameters:
+      - description: AuthZEN Trust Registry Evaluation Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/authzen.EvaluationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Trust decision (decision=true for trusted, false for untrusted)
+          schema:
+            $ref: '#/definitions/authzen.EvaluationResponse'
+        "400":
+          description: Invalid request format or validation error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Evaluate trust decision (AuthZEN Trust Registry Profile)
+      tags:
+      - AuthZEN
+  /healthz:
+    get:
+      description: Returns OK if the server is running and able to handle requests
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.HealthResponse'
+      summary: Liveness check
+      tags:
+      - Health
+  /info:
+    get:
+      deprecated: true
+      description: |-
+        Returns detailed summaries of all loaded Trust Status Lists
+
+        DEPRECATED: This endpoint is deprecated. Use GET /tsls instead.
+
+        This endpoint provides comprehensive information about each TSL including:
+        - Territory code
+        - Sequence number
+        - Issue date
+        - Next update date
+        - Number of services
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: tsl_summaries
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get TSL information (DEPRECATED - use GET /tsls)
+      tags:
+      - Status
+  /readyz:
+    get:
+      description: |-
+        Returns ready status if pipeline has been processed and TSLs are loaded
+
+        Query Parameters:
+        - verbose=true: Include detailed TSL information in the response
+      parameters:
+      - description: Include detailed TSL information
+        in: query
+        name: verbose
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Service is ready
+          schema:
+            $ref: '#/definitions/api.ReadinessResponse'
+        "503":
+          description: Service is not ready
+          schema:
+            $ref: '#/definitions/api.ReadinessResponse'
+      summary: Readiness check
+      tags:
+      - Health
+  /status:
+    get:
+      deprecated: true
+      description: |-
+        Returns the current server status including TSL count and last processing time
+
+        DEPRECATED: This endpoint is deprecated. Use GET /readyz for health checks.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: tsl_count, last_processed
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get server status (DEPRECATED - use GET /readyz)
+      tags:
+      - Status
+  /tsls:
+    get:
+      description: |-
+        Returns comprehensive information about all loaded Trust Status Lists
+
+        This is the primary endpoint for retrieving TSL metadata including:
+        - Territory codes
+        - Sequence numbers
+        - Issue and next update dates
+        - Service counts per TSL
+        - Last processing timestamp
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: count, last_updated, tsls
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List Trust Status Lists
+      tags:
+      - TSLs
+schemes:
+- http
+- https
+swagger: "2.0"
+tags:
+- description: Health check and readiness endpoints for Kubernetes and monitoring
+    systems
+  name: Health
+- description: Server status and TSL information endpoints
+  name: Status
+- description: AuthZEN protocol endpoints for trust decision evaluation
+  name: AuthZEN
