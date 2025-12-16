@@ -18,7 +18,7 @@ This guide covers the development workflow, tooling, and best practices for cont
 
 ```bash
 # Clone the repository
-git clone https://github.com/SUNET/go-trust.git
+git clone https://github.com/sirosfoundation/go-trust.git
 cd go-trust
 
 # Set up development environment (installs tools, sets up git hooks)

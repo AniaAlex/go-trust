@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/logging"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
 )
 
 // SetFetchOptions is a pipeline step that configures the options for fetching Trust Status Lists.

@@ -2,19 +2,19 @@
 
 <div align="center">
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/SUNET/go-trust.svg)](https://pkg.go.dev/github.com/SUNET/go-trust)
-[![Go Report Card](https://goreportcard.com/badge/github.com/SUNET/go-trust)](https://goreportcard.com/report/github.com/SUNET/go-trust)
-[![Coverage](https://raw.githubusercontent.com/SUNET/go-trust/badges/.badges/main/coverage.svg)](https://github.com/SUNET/go-trust/actions/workflows/go.yml)
-[![Go Compatibility](https://raw.githubusercontent.com/SUNET/go-trust/badges/.badges/main/golang.svg)](https://go.dev/)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/SUNET/go-trust/go.yml?branch=main)](https://github.com/SUNET/go-trust/actions)
+[![Go Reference](https://pkg.go.dev/badge/github.com/sirosfoundation/go-trust.svg)](https://pkg.go.dev/github.com/sirosfoundation/go-trust)
+[![Go Report Card](https://goreportcard.com/badge/github.com/sirosfoundation/go-trust)](https://goreportcard.com/report/github.com/sirosfoundation/go-trust)
+[![Coverage](https://raw.githubusercontent.com/sirosfoundation/go-trust/badges/.badges/main/coverage.svg)](https://github.com/sirosfoundation/go-trust/actions/workflows/go.yml)
+[![Go Compatibility](https://raw.githubusercontent.com/sirosfoundation/go-trust/badges/.badges/main/golang.svg)](https://go.dev/)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/sirosfoundation/go-trust/go.yml?branch=main)](https://github.com/sirosfoundation/go-trust/actions)
 [![License](https://img.shields.io/badge/License-BSD_2--Clause-orange.svg)](https://opensource.org/licenses/BSD-2-Clause)
-[![Latest Release](https://img.shields.io/github/v/release/SUNET/go-trust?include_prereleases)](https://github.com/SUNET/go-trust/releases)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/SUNET/go-trust)](https://go.dev/)
+[![Latest Release](https://img.shields.io/github/v/release/sirosfoundation/go-trust?include_prereleases)](https://github.com/sirosfoundation/go-trust/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/sirosfoundation/go-trust)](https://go.dev/)
 
-[![Issues](https://img.shields.io/github/issues/SUNET/go-trust)](https://github.com/SUNET/go-trust/issues)
-[![Last Commit](https://img.shields.io/github/last-commit/SUNET/go-trust)](https://github.com/SUNET/go-trust/commits/main)
-[![CodeQL](https://github.com/SUNET/go-trust/actions/workflows/codeql.yml/badge.svg)](https://github.com/SUNET/go-trust/actions/workflows/codeql.yml)
-[![Dependency Status](https://img.shields.io/librariesio/github/SUNET/go-trust)](https://libraries.io/github/SUNET/go-trust)
+[![Issues](https://img.shields.io/github/issues/sirosfoundation/go-trust)](https://github.com/sirosfoundation/go-trust/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/sirosfoundation/go-trust)](https://github.com/sirosfoundation/go-trust/commits/main)
+[![CodeQL](https://github.com/sirosfoundation/go-trust/actions/workflows/codeql.yml/badge.svg)](https://github.com/sirosfoundation/go-trust/actions/workflows/codeql.yml)
+[![Dependency Status](https://img.shields.io/librariesio/github/sirosfoundation/go-trust)](https://libraries.io/github/sirosfoundation/go-trust)
 
 </div>
 
@@ -167,7 +167,7 @@ The ETSI TSL registry validates X.509 certificates against ETSI TS 119 612 Trust
 Use `TSLRegistry` for standalone applications that don't need background pipeline updates. It loads trust data directly from local files or remote URLs.
 
 ```go
-import "github.com/SUNET/go-trust/pkg/registry/etsi"
+import "github.com/sirosfoundation/go-trust/pkg/registry/etsi"
 
 // Load from local PEM certificate bundle (recommended for production)
 reg, err := etsi.NewTSLRegistry(etsi.TSLConfig{
@@ -209,9 +209,9 @@ Use `PipelineBackedRegistry` when running the go-trust server with background TS
 
 ```go
 import (
-    "github.com/SUNET/go-trust/pkg/api"
-    "github.com/SUNET/go-trust/pkg/pipeline"
-    "github.com/SUNET/go-trust/pkg/registry/etsi"
+    "github.com/sirosfoundation/go-trust/pkg/api"
+    "github.com/sirosfoundation/go-trust/pkg/pipeline"
+    "github.com/sirosfoundation/go-trust/pkg/registry/etsi"
 )
 
 // Create server context with pipeline
@@ -244,7 +244,7 @@ The OpenID Federation registry enables trust evaluation for entities in an OpenI
 
 ```go
 import (
-    "github.com/SUNET/go-trust/pkg/registry/oidfed"
+    "github.com/sirosfoundation/go-trust/pkg/registry/oidfed"
 )
 
 // Create OpenID Federation registry
@@ -451,7 +451,7 @@ The did:web registry implements security requirements from the W3C specification
 
 **Configuration Example:**
 ```go
-import "github.com/SUNET/go-trust/pkg/registry/didweb"
+import "github.com/sirosfoundation/go-trust/pkg/registry/didweb"
 
 registry, err := didweb.NewDIDWebRegistry(didweb.Config{
     Timeout:     30 * time.Second,
@@ -466,7 +466,7 @@ For more details on OpenID Federation, see the [specification](https://openid.ne
 
 ```bash
 # Clone the repository
-git clone https://github.com/SUNET/go-trust.git
+git clone https://github.com/sirosfoundation/go-trust.git
 cd go-trust
 
 # Build the project
@@ -1006,7 +1006,7 @@ For detailed developer documentation, see [DEVELOPER.md](DEVELOPER.md).
 
 ```bash
 # Clone the repository
-git clone https://github.com/SUNET/go-trust.git
+git clone https://github.com/sirosfoundation/go-trust.git
 cd go-trust
 
 # Set up development environment
@@ -1416,7 +1416,7 @@ To specify a log level other than the default (info):
 When extending Go-Trust, you can use the logging system programmatically:
 
 ```go
-import "github.com/SUNET/go-trust/pkg/logging"
+import "github.com/sirosfoundation/go-trust/pkg/logging"
 
 func MyFunction() {
     logger := logging.DefaultLogger()
@@ -1445,5 +1445,5 @@ This project is licensed under the BSD 2-Clause License - see the [LICENSE.txt](
 
 - [ETSI TS 119612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/) - Trust-service status list format
 - [AuthZEN](https://authzen.dev/) - Authorization framework
-- [SUNET](https://www.sunet.se/) - Swedish University Network
+- [sirosfoundation](https://www.sunet.se/) - Swedish University Network
 

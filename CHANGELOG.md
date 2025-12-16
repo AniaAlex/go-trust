@@ -195,7 +195,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to this pr
 
 ## Links
 
-- [Repository](https://github.com/SUNET/go-trust)
-- [Issue Tracker](https://github.com/SUNET/go-trust/issues)
+- [Repository](https://github.com/sirosfoundation/go-trust)
+- [Issue Tracker](https://github.com/sirosfoundation/go-trust/issues)
 - [Documentation](README.md)
 - [Developer Guide](DEVELOPER.md)

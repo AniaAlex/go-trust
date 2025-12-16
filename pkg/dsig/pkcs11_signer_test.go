@@ -3,8 +3,8 @@ package dsig
 import (
 	"testing"
 
-	"github.com/SUNET/go-trust/pkg/dsig/test"
 	"github.com/ThalesGroup/crypto11"
+	"github.com/sirosfoundation/go-trust/pkg/dsig/test"
 )
 
 func TestNewPKCS11Signer(t *testing.T) {

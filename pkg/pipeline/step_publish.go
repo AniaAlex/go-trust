@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/dsig"
-	"github.com/SUNET/go-trust/pkg/logging"
-	"github.com/SUNET/go-trust/pkg/validation"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/dsig"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/validation"
 )
 
 // PublishTSL is a pipeline step that serializes TSLs to XML files in a specified directory.

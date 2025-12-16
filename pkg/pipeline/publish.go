@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/dsig"
-	"github.com/SUNET/go-trust/pkg/logging"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/dsig"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
 )
 
 // processTreeForPublishing processes a TSL tree for publishing,

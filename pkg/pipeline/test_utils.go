@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
 )
 
 // Test certificate variables for reuse in tests

@@ -3,7 +3,7 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
 )
 
 func TestTSLTree(t *testing.T) {

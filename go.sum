@@ -2,10 +2,10 @@ github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
 github.com/PuerkitoBio/goquery v1.10.3 h1:pFYcNSqHxBD06Fpj/KsbStFRsgRATgnf3LeXiUkhzPo=
 github.com/PuerkitoBio/goquery v1.10.3/go.mod h1:tMUX0zDMHXYlAQk6p35XxQMqMweEKB7iK7iLNd4RH4Y=
-github.com/SUNET/g119612 v0.0.0-20251017074852-ae6e0d1d1c93 h1:tRgmtdzuBDcE9fUCnQ0zYHV6U/cua2+rgJ3bJz3iWiM=
-github.com/SUNET/g119612 v0.0.0-20251017074852-ae6e0d1d1c93/go.mod h1:4FYuTxGsBc7Q317QEdlUYv06tslszzl5imWJ5Q+dT/U=
-github.com/SUNET/goxmldsig v1.5.0-leifj1 h1:zGW4Wq+6TPDNB2Dpr57QKZilCcNkbPN/HTdiYSH7FsE=
-github.com/SUNET/goxmldsig v1.5.0-leifj1/go.mod h1:x98CjQNFJcWfMxeOrMnMKg70lvDP6tE0nTaeUnjXDmk=
+github.com/sirosfoundation/g119612 v0.0.0-20251017074852-ae6e0d1d1c93 h1:tRgmtdzuBDcE9fUCnQ0zYHV6U/cua2+rgJ3bJz3iWiM=
+github.com/sirosfoundation/g119612 v0.0.0-20251017074852-ae6e0d1d1c93/go.mod h1:4FYuTxGsBc7Q317QEdlUYv06tslszzl5imWJ5Q+dT/U=
+github.com/sirosfoundation/goxmldsig v1.5.0-leifj1 h1:zGW4Wq+6TPDNB2Dpr57QKZilCcNkbPN/HTdiYSH7FsE=
+github.com/sirosfoundation/goxmldsig v1.5.0-leifj1/go.mod h1:x98CjQNFJcWfMxeOrMnMKg70lvDP6tE0nTaeUnjXDmk=
 github.com/ThalesGroup/crypto11 v1.6.0 h1:Og9EMn44fBS4GNnGnH1aqHnF2wL6F7IU/RhpJajWX/4=
 github.com/ThalesGroup/crypto11 v1.6.0/go.mod h1:H6LRjN5R5SHxTrLqGNteisLDI0/IC6+SGx1pHtbwizE=
 github.com/TwiN/gocache/v2 v2.2.2 h1:4HToPfDV8FSbaYO5kkbhLpEllUYse5rAf+hVU/mSsuI=

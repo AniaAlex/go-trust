@@ -52,7 +52,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
 const (

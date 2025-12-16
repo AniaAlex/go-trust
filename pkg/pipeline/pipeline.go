@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/SUNET/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
 	"gopkg.in/yaml.v3"
 )
 

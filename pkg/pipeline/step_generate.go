@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
 	"gopkg.in/yaml.v3"
 )
 

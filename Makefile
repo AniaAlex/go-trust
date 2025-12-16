@@ -73,6 +73,7 @@ install-swag: ## Install swag tool for generating Swagger docs
 clean: ## remove temporary files
 	go clean
 	rm -rf docs/swagger
+	rm -f *.out *.log
 
 .PHONY: deps
 deps: ## Update dependencies

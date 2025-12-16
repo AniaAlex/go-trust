@@ -42,10 +42,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/authzen"
-	"github.com/SUNET/go-trust/pkg/registry"
-	"github.com/SUNET/go-trust/pkg/utils/x509util"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/registry"
+	"github.com/sirosfoundation/go-trust/pkg/utils/x509util"
 )
 
 // TSLConfig configures an ETSI TSL registry.
@@ -122,7 +122,7 @@ func NewTSLRegistry(cfg TSLConfig) (*TSLRegistry, error) {
 		cfg.FetchTimeout = 30 * time.Second
 	}
 	if cfg.UserAgent == "" {
-		cfg.UserAgent = "Go-Trust/1.0 TSL Registry (+https://github.com/SUNET/go-trust)"
+		cfg.UserAgent = "Go-Trust/1.0 TSL Registry (+https://github.com/sirosfoundation/go-trust)"
 	}
 
 	r := &TSLRegistry{

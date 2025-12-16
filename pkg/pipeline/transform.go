@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/validation"
-	"github.com/SUNET/go-trust/xslt"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/validation"
+	"github.com/sirosfoundation/go-trust/xslt"
 )
 
 // xsltCache caches XSLT stylesheet content to avoid repeated reads

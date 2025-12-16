@@ -182,7 +182,7 @@ The pipeline would be a completely separate project that produces data `go-trust
 Refactor into reusable libraries, make CLI tools thin wrappers:
 
 ```
-github.com/SUNET/go-trust/
+github.com/sirosfoundation/go-trust/
 ├── pkg/
 │   ├── authzen/         # Protocol types (already standalone)
 │   ├── authzenclient/   # Client library (already standalone)
@@ -220,7 +220,7 @@ New repository or `cmd/tsl-tool/` in this repo:
 package main
 
 import (
-    "github.com/SUNET/go-trust/pkg/tslpipeline"
+    "github.com/sirosfoundation/go-trust/pkg/tslpipeline"
 )
 
 func main() {

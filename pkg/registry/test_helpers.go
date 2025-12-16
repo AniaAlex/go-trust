@@ -3,7 +3,7 @@ package registry
 import (
 	"context"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
 // MockRegistry is a test helper that implements TrustRegistry

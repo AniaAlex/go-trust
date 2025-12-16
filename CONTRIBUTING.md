@@ -37,7 +37,7 @@ This project follows standard open source community guidelines. Please be respec
 
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.com/SUNET/go-trust.git
+   git remote add upstream https://github.com/sirosfoundation/go-trust.git
    ```
 
 4. **Run the setup script**:

@@ -6,12 +6,12 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/SUNET/go-trust/docs/swagger" // Import generated docs
-	"github.com/SUNET/go-trust/pkg/api"
-	"github.com/SUNET/go-trust/pkg/pipeline"
-	"github.com/SUNET/go-trust/pkg/registry"
-	"github.com/SUNET/go-trust/pkg/registry/etsi"
 	"github.com/gin-gonic/gin"
+	_ "github.com/sirosfoundation/go-trust/docs/swagger" // Import generated docs
+	"github.com/sirosfoundation/go-trust/pkg/api"
+	"github.com/sirosfoundation/go-trust/pkg/pipeline"
+	"github.com/sirosfoundation/go-trust/pkg/registry"
+	"github.com/sirosfoundation/go-trust/pkg/registry/etsi"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
@@ -22,10 +22,10 @@ import (
 // @description
 // @description Go-Trust provides AuthZEN-based trust decisions for X.509 certificates using ETSI trust status lists.
 // @description It processes TSLs, validates certificates, and provides health/metrics endpoints for production deployment.
-// @termsOfService https://github.com/SUNET/go-trust
+// @termsOfService https://github.com/sirosfoundation/go-trust
 
-// @contact.name SUNET
-// @contact.url https://github.com/SUNET/go-trust
+// @contact.name sirosfoundation
+// @contact.url https://github.com/sirosfoundation/go-trust
 // @contact.email noreply@sunet.se
 
 // @license.name BSD-2-Clause

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
 // generateTestCertificate creates a self-signed test certificate

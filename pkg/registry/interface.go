@@ -15,7 +15,7 @@ package registry
 import (
 	"context"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
 // TrustRegistry represents a trust resolution backend that can evaluate

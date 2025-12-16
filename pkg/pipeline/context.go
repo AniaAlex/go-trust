@@ -4,8 +4,8 @@ import (
 	"crypto/x509"
 	"time"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/utils"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/utils"
 )
 
 // Context holds the shared state passed between pipeline steps during processing.
@@ -132,7 +132,7 @@ func (ctx *Context) EnsureTSLStack() *Context {
 func (ctx *Context) EnsureTSLFetchOptions() *Context {
 	if ctx.TSLFetchOptions == nil {
 		ctx.TSLFetchOptions = &etsi119612.TSLFetchOptions{
-			UserAgent: "Go-Trust/1.0 Pipeline (+https://github.com/SUNET/go-trust)",
+			UserAgent: "Go-Trust/1.0 Pipeline (+https://github.com/sirosfoundation/go-trust)",
 			Timeout:   30 * time.Second,
 		}
 	}

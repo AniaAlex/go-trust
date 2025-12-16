@@ -4,9 +4,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/logging"
-	"github.com/SUNET/go-trust/pkg/pipeline"
-	"github.com/SUNET/go-trust/pkg/registry"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/pipeline"
+	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
 // ServerContext holds the shared state for the API server, including the registry manager.

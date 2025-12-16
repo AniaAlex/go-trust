@@ -7,9 +7,9 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/logging"
-	"github.com/SUNET/go-trust/pkg/utils"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"

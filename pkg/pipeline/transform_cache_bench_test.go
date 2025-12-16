@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
 )
 
 // BenchmarkXSLTCaching benchmarks the performance improvement from XSLT caching

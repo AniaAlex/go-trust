@@ -3,8 +3,8 @@ package api
 import (
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/logging"
 	"github.com/gin-gonic/gin"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
 )
 
 // HealthResponse represents the response from health check endpoints

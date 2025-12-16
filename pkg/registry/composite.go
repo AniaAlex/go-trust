@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
 // LogicOperator defines how a CompositeRegistry combines results from child registries

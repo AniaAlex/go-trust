@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
 	oidfedjwx "github.com/go-oidfed/lib/jwx"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
 func TestNewOIDFedRegistry(t *testing.T) {

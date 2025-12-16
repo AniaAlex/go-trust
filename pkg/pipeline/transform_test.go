@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/xslt"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/xslt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

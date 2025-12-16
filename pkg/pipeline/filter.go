@@ -3,7 +3,7 @@ package pipeline
 import (
 	"strings"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
 )
 
 // FilterTSLs applies filters to the TSLs based on the filters defined in the context.

@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
-	"github.com/SUNET/go-trust/pkg/registry"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
 // DIDDocument represents a W3C DID Document.

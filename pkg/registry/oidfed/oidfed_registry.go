@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
-	"github.com/SUNET/go-trust/pkg/registry"
 	oidfed "github.com/go-oidfed/lib"
 	oidfedjwx "github.com/go-oidfed/lib/jwx"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
 // OIDFedRegistry implements a trust registry using OpenID Federation.

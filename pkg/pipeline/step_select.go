@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/logging"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
 )
 
 // SelectCertPool creates a new x509.CertPool from all certificates in the loaded TSLs.

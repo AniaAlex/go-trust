@@ -103,8 +103,8 @@ TestRefresh                         ✅
 
 ```go
 import (
-    "github.com/SUNET/go-trust/pkg/registry/didweb"
-    "github.com/SUNET/go-trust/pkg/authzen"
+    "github.com/sirosfoundation/go-trust/pkg/registry/didweb"
+    "github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
 // Create registry

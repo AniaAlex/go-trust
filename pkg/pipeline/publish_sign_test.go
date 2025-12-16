@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/logging"
 	"github.com/beevik/etree"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
 )
 
 func TestPublishTSL_WithSignature(t *testing.T) {

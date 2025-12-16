@@ -86,7 +86,7 @@
 //	GET /metrics            - Prometheus metrics endpoint for monitoring
 //	                          Returns: Prometheus-formatted metrics (text/plain)
 //
-// See: https://github.com/SUNET/go-trust for more information
+// See: https://github.com/sirosfoundation/go-trust for more information
 package main
 
 import (
@@ -96,11 +96,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/SUNET/go-trust/pkg/api"
-	"github.com/SUNET/go-trust/pkg/config"
-	"github.com/SUNET/go-trust/pkg/logging"
-	"github.com/SUNET/go-trust/pkg/pipeline"
 	"github.com/gin-gonic/gin"
+	"github.com/sirosfoundation/go-trust/pkg/api"
+	"github.com/sirosfoundation/go-trust/pkg/config"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/pipeline"
 )
 
 // Version is set at build time using -ldflags

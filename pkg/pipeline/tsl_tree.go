@@ -1,7 +1,7 @@
 package pipeline
 
 import (
-	"github.com/SUNET/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
 )
 
 // TSLNode represents a node in the TSL tree

@@ -7,10 +7,10 @@ import (
 
 	"crypto/x509"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
-	"github.com/SUNET/go-trust/pkg/logging"
-	"github.com/SUNET/go-trust/pkg/utils/x509util"
 	"github.com/gin-gonic/gin"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/utils/x509util"
 )
 
 // StatusHandler godoc

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
-	"github.com/SUNET/go-trust/pkg/registry/did"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/registry/did"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

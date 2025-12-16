@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/logging"
-	"github.com/SUNET/go-trust/pkg/utils"
-	"github.com/SUNET/go-trust/pkg/validation"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/utils"
+	"github.com/sirosfoundation/go-trust/pkg/validation"
 )
 
 // LoadTSL is a pipeline step that loads Trust Service Lists (TSLs) from a URL or file path,

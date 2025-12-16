@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SUNET/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
 	"github.com/stretchr/testify/assert"
 )
 

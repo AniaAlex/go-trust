@@ -36,10 +36,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SUNET/g119612/pkg/etsi119612"
-	"github.com/SUNET/go-trust/pkg/authzen"
-	"github.com/SUNET/go-trust/pkg/registry"
-	"github.com/SUNET/go-trust/pkg/utils/x509util"
+	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/registry"
+	"github.com/sirosfoundation/go-trust/pkg/utils/x509util"
 )
 
 // PipelineContextProvider is an interface for accessing pipeline-managed TSL data.

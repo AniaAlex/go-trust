@@ -50,7 +50,7 @@ Output:
 ```
 Skipping integration tests. Set RUN_INTEGRATION_TESTS=1 to enable.
 Running unit tests only...
-ok      github.com/SUNET/go-trust/cmd   0.170s  coverage: 24.6% of statements
+ok      github.com/sirosfoundation/go-trust/cmd   0.170s  coverage: 24.6% of statements
 ```
 
 ### Run All Tests (Unit + Integration)

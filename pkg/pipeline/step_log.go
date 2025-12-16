@@ -3,7 +3,7 @@ package pipeline
 import (
 	"strings"
 
-	"github.com/SUNET/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
 )
 
 // Echo is a pipeline step that does nothing and simply returns the context unchanged.

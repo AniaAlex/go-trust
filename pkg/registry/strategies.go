@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
 // ResolutionResult contains the evaluation result plus metadata about which registry resolved it

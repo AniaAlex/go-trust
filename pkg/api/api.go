@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/SUNET/go-trust/pkg/authzen"
-	"github.com/SUNET/go-trust/pkg/logging"
-	"github.com/SUNET/go-trust/pkg/pipeline"
 	"github.com/gin-gonic/gin"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/pipeline"
 )
 
 // parseX5C extracts and parses x5c certificates from a map[string]interface{}.
