@@ -1445,5 +1445,6 @@ This project is licensed under the BSD 2-Clause License - see the [LICENSE.txt](
 
 - [ETSI TS 119612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/) - Trust-service status list format
 - [AuthZEN](https://authzen.dev/) - Authorization framework
-- [sirosfoundation](https://www.sunet.se/) - Swedish University Network
+- [SUNET](https://www.sunet.se/) - Swedish University Network
+- [SIROS Foundation](https://siros.org/)
 
