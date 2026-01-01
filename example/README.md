@@ -23,6 +23,7 @@ gt --no-server example/03-generate-tsl.yaml
 | `02-server-pipeline.yaml` | Full server mode with API | Production API server, AuthZEN PDP |
 | `03-generate-tsl.yaml` | Generate TSL from YAML metadata | Creating custom trust lists |
 | `didweb-registry-example.go` | Go code using did:web registry | Programmatic did:web resolution |
+| `testserver-example.go` | Embedded test server usage | Integration testing, mocking |
 
 ## Pipeline YAML Format
 

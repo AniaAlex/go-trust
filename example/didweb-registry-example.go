@@ -1,5 +1,9 @@
-// Package main demonstrates using the did:web registry with go-trustpackage example
+//go:build ignore
+// +build ignore
 
+// Package main demonstrates using the did:web registry with go-trust
+//
+// Run with: go run example/didweb-registry-example.go
 package main
 
 import (

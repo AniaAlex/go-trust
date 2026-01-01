@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"io"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -33,4 +34,13 @@ func JSONLogger(level LogLevel) Logger {
 	l := NewLogrusAdapter(logger)
 	l.SetLevel(level)
 	return l
+}
+
+// SilentLogger returns a Logger that discards all output.
+// Useful for tests where logging output is not needed.
+func SilentLogger() Logger {
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	logger.SetLevel(logrus.PanicLevel)
+	return NewLogrusAdapter(logger)
 }

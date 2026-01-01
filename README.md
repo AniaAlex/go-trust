@@ -1437,6 +1437,91 @@ func MyFunction() {
 }
 ```
 
+## Embedded Test Server
+
+The `testserver` package provides an embedded test server for integration testing. This allows dependent applications to test their AuthZEN client integrations without running a full go-trust service with pipelines.
+
+### Basic Usage
+
+```go
+import (
+    "testing"
+    "github.com/sirosfoundation/go-trust/pkg/testserver"
+    "github.com/sirosfoundation/go-trust/pkg/authzenclient"
+)
+
+func TestMyApplication(t *testing.T) {
+    // Create a test server that accepts all trust requests
+    srv := testserver.New(testserver.WithAcceptAll())
+    defer srv.Close()
+
+    // Use the server URL with your AuthZEN client
+    client := authzenclient.New(srv.URL())
+    
+    // Make requests as normal
+    resp, err := client.Evaluate(ctx, req)
+    if err != nil {
+        t.Fatal(err)
+    }
+    if !resp.Decision {
+        t.Error("expected trust decision to be true")
+    }
+}
+```
+
+### Configuration Options
+
+| Option | Description |
+|--------|-------------|
+| `WithAcceptAll()` | Accept all trust requests (default) |
+| `WithRejectAll()` | Reject all trust requests |
+| `WithMockRegistry(name, decision, types)` | Add a mock registry with specific behavior |
+| `WithDecisionFunc(fn)` | Use a callback for dynamic trust decisions |
+| `WithBaseURL(url)` | Override the base URL in AuthZEN discovery |
+| `WithRegistry(reg)` | Add a custom TrustRegistry implementation |
+
+### Dynamic Decision Callback
+
+For complex test scenarios, use `WithDecisionFunc` to provide dynamic responses:
+
+```go
+srv := testserver.New(
+    testserver.WithDecisionFunc(func(req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
+        // Accept only specific subjects
+        if req.Subject.ID == "trusted-issuer" {
+            return &authzen.EvaluationResponse{Decision: true}, nil
+        }
+        // Reject everything else
+        return &authzen.EvaluationResponse{Decision: false}, nil
+    }),
+)
+defer srv.Close()
+```
+
+### Available Endpoints
+
+The test server exposes the same endpoints as a full go-trust server:
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /evaluation` | AuthZEN trust evaluation |
+| `GET /.well-known/authzen-configuration` | AuthZEN discovery document |
+| `GET /healthz` | Liveness probe |
+| `GET /readyz` | Readiness probe |
+
+### Custom HTTP Handler
+
+For advanced test setups, use `NewHandler` to get an `http.Handler`:
+
+```go
+handler := testserver.NewHandler(
+    testserver.WithAcceptAll(),
+    testserver.WithBaseURL("https://pdp.example.com"),
+)
+srv := httptest.NewServer(handler)
+defer srv.Close()
+```
+
 ## License
 
 This project is licensed under the BSD 2-Clause License - see the [LICENSE.txt](LICENSE.txt) file for details.
