@@ -262,6 +262,11 @@ func (m *RegistryManager) evaluateSequential(ctx context.Context, req *authzen.E
 	registries := m.getApplicableRegistries(req)
 	m.mu.RUnlock()
 
+	return m.evaluateSequentialFiltered(ctx, req, registries, nil)
+}
+
+// evaluateSequentialFiltered is the internal implementation that works with pre-filtered registries.
+func (m *RegistryManager) evaluateSequentialFiltered(ctx context.Context, req *authzen.EvaluationRequest, registries []TrustRegistry, policyCtx *PolicyContext) (*authzen.EvaluationResponse, error) {
 	if len(registries) == 0 {
 		return &authzen.EvaluationResponse{
 			Decision: false,
@@ -307,17 +312,216 @@ func (m *RegistryManager) evaluateSequential(ctx context.Context, req *authzen.E
 			resp.Context.Reason["registry"] = info.Name
 			resp.Context.Reason["resolution_ms"] = resolutionMS
 			resp.Context.Reason["registries_attempted"] = attempted
+			if policyCtx != nil && policyCtx.Policy != nil {
+				resp.Context.Reason["policy"] = policyCtx.Policy.Name
+			}
 			return resp, nil
 		}
+	}
+
+	reason := map[string]interface{}{
+		"error":                "no registry returned positive match",
+		"registries_attempted": attempted,
+	}
+	if policyCtx != nil && policyCtx.Policy != nil {
+		reason["policy"] = policyCtx.Policy.Name
 	}
 
 	return &authzen.EvaluationResponse{
 		Decision: false,
 		Context: &authzen.EvaluationResponseContext{
-			Reason: map[string]interface{}{
-				"error":                "no registry returned positive match",
-				"registries_attempted": attempted,
+			Reason: reason,
+		},
+	}, nil
+}
+
+// evaluateFirstMatchFiltered is the internal implementation for FirstMatch with pre-filtered registries.
+func (m *RegistryManager) evaluateFirstMatchFiltered(ctx context.Context, req *authzen.EvaluationRequest, registries []TrustRegistry, policyCtx *PolicyContext) (*authzen.EvaluationResponse, error) {
+	// Create timeout context
+	timeoutCtx, cancel := context.WithTimeout(ctx, m.timeout)
+	defer cancel()
+
+	// Channel for results
+	results := make(chan *ResolutionResult, len(registries))
+
+	// Query all registries in parallel
+	var wg sync.WaitGroup
+	for _, reg := range registries {
+		wg.Add(1)
+		go func(registry TrustRegistry) {
+			defer wg.Done()
+
+			info := registry.Info()
+
+			// Check circuit breaker
+			if !m.circuitBreakers[info.Name].CanAttempt() {
+				return
+			}
+
+			startTime := time.Now()
+			resp, err := registry.Evaluate(timeoutCtx, req)
+			resolutionMS := time.Since(startTime).Milliseconds()
+
+			if err != nil {
+				m.circuitBreakers[info.Name].RecordFailure()
+				return
+			}
+
+			m.circuitBreakers[info.Name].RecordSuccess()
+
+			// Send result if decision is true
+			if resp != nil && resp.Decision {
+				results <- &ResolutionResult{
+					Decision:     true,
+					Registry:     info.Name,
+					Confidence:   1.0,
+					Response:     resp,
+					ResolutionMS: resolutionMS,
+				}
+			}
+		}(reg)
+	}
+
+	// Wait for results in separate goroutine
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Return first positive result
+	select {
+	case result := <-results:
+		if result != nil {
+			// Add resolution metadata to response context
+			if result.Response.Context == nil {
+				result.Response.Context = &authzen.EvaluationResponseContext{}
+			}
+			if result.Response.Context.Reason == nil {
+				result.Response.Context.Reason = make(map[string]interface{})
+			}
+			result.Response.Context.Reason["registry"] = result.Registry
+			result.Response.Context.Reason["resolution_ms"] = result.ResolutionMS
+			if policyCtx != nil && policyCtx.Policy != nil {
+				result.Response.Context.Reason["policy"] = policyCtx.Policy.Name
+			}
+
+			return result.Response, nil
+		}
+	case <-timeoutCtx.Done():
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"error": "timeout waiting for registry responses",
+				},
 			},
+		}, nil
+	}
+
+	// No positive results
+	reason := map[string]interface{}{
+		"error":              "no registry returned positive match",
+		"registries_queried": len(registries),
+	}
+	if policyCtx != nil && policyCtx.Policy != nil {
+		reason["policy"] = policyCtx.Policy.Name
+	}
+
+	return &authzen.EvaluationResponse{
+		Decision: false,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: reason,
+		},
+	}, nil
+}
+
+// evaluateAllFiltered is the internal implementation for AllRegistries with pre-filtered registries.
+func (m *RegistryManager) evaluateAllFiltered(ctx context.Context, req *authzen.EvaluationRequest, registries []TrustRegistry, policyCtx *PolicyContext) (*authzen.EvaluationResponse, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, m.timeout)
+	defer cancel()
+
+	type result struct {
+		registry string
+		response *authzen.EvaluationResponse
+		err      error
+		duration int64
+	}
+
+	results := make(chan result, len(registries))
+	var wg sync.WaitGroup
+
+	for _, reg := range registries {
+		wg.Add(1)
+		go func(registry TrustRegistry) {
+			defer wg.Done()
+
+			info := registry.Info()
+			startTime := time.Now()
+
+			if !m.circuitBreakers[info.Name].CanAttempt() {
+				return
+			}
+
+			resp, err := registry.Evaluate(timeoutCtx, req)
+			duration := time.Since(startTime).Milliseconds()
+
+			if err != nil {
+				m.circuitBreakers[info.Name].RecordFailure()
+			} else {
+				m.circuitBreakers[info.Name].RecordSuccess()
+			}
+
+			results <- result{
+				registry: info.Name,
+				response: resp,
+				err:      err,
+				duration: duration,
+			}
+		}(reg)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect all results
+	var allResults []map[string]interface{}
+	decision := false
+	registriesMatched := []string{}
+
+	for r := range results {
+		resultInfo := map[string]interface{}{
+			"registry":    r.registry,
+			"duration_ms": r.duration,
+		}
+
+		if r.err != nil {
+			resultInfo["error"] = r.err.Error()
+		} else if r.response != nil {
+			resultInfo["decision"] = r.response.Decision
+			if r.response.Decision {
+				decision = true
+				registriesMatched = append(registriesMatched, r.registry)
+			}
+		}
+
+		allResults = append(allResults, resultInfo)
+	}
+
+	reason := map[string]interface{}{
+		"registries_queried": len(registries),
+		"registries_matched": registriesMatched,
+		"all_results":        allResults,
+	}
+	if policyCtx != nil && policyCtx.Policy != nil {
+		reason["policy"] = policyCtx.Policy.Name
+	}
+
+	return &authzen.EvaluationResponse{
+		Decision: decision,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: reason,
 		},
 	}, nil
 }
