@@ -130,6 +130,54 @@ quorum := registry.NewCompositeRegistryWithOptions(
 )
 ```
 
+#### Policy-Based Routing
+
+The `PolicyManager` maps `action.name` values to trust constraints, enabling **protocol-agnostic clients**:
+
+```go
+// Define policies for different trust contexts
+pm := registry.NewPolicyManager()
+
+// Credential issuer verification policy
+pm.RegisterPolicy(&registry.Policy{
+    Name:       "credential-issuer",
+    Registries: []string{"eu-wallet-federation"},
+    OIDFed: &registry.OIDFedPolicyConstraints{
+        RequiredTrustMarks: []string{"https://example.eu/tm/issuer"},
+        AllowedEntityTypes: []string{"openid_credential_issuer"},
+    },
+})
+
+// PID provider with stricter requirements
+pm.RegisterPolicy(&registry.Policy{
+    Name:       "pid-provider",
+    Registries: []string{"eu-wallet-federation"},
+    OIDFed: &registry.OIDFedPolicyConstraints{
+        RequiredTrustMarks: []string{
+            "https://example.eu/tm/pid-provider",
+            "https://example.eu/tm/eidas-qualified",
+        },
+    },
+    ETSI: &registry.ETSIPolicyConstraints{
+        TrustServiceTypes: []string{"QCert"},
+    },
+})
+
+// Apply to manager
+manager.SetPolicyManager(pm)
+```
+
+**Client usage** - clients specify only the action name:
+```go
+resp, err := client.Evaluate(ctx, &authzen.EvaluationRequest{
+    Subject:  authzen.Subject{Type: "key", ID: entityID},
+    Resource: authzen.Resource{ID: entityID, Type: "jwk", Key: jwk},
+    Action:   authzen.Action{Name: "credential-issuer"}, // Policy applied server-side
+})
+```
+
+For detailed policy configuration, see [OIDFED_PROTOCOL_MAPPING.md](./docs/OIDFED_PROTOCOL_MAPPING.md#policy-based-routing).
+
 #### Circuit Breaker Pattern
 
 Built-in circuit breakers prevent cascade failures:
