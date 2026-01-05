@@ -25,6 +25,7 @@ type DIDWebRegistry struct {
 	httpClient  *http.Client
 	timeout     time.Duration
 	description string
+	allowHTTP   bool // For testing only
 }
 
 // Config holds configuration for creating a DIDWebRegistry.
@@ -37,6 +38,10 @@ type Config struct {
 
 	// InsecureSkipVerify disables TLS certificate verification (NOT RECOMMENDED for production)
 	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
+
+	// AllowHTTP allows using HTTP instead of HTTPS for DID resolution.
+	// WARNING: This should only be used for testing. The did:web spec requires HTTPS.
+	AllowHTTP bool `json:"allow_http,omitempty"`
 }
 
 // DIDDocument represents a W3C DID Document.
@@ -96,6 +101,7 @@ func NewDIDWebRegistry(config Config) (*DIDWebRegistry, error) {
 		httpClient:  httpClient,
 		timeout:     timeout,
 		description: description,
+		allowHTTP:   config.AllowHTTP,
 	}, nil
 }
 
@@ -122,8 +128,15 @@ func (r *DIDWebRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 		}, nil
 	}
 
-	// Resolve the DID document
-	didDoc, err := r.resolveDID(ctx, req.Subject.ID)
+	// Extract the base DID without fragment (e.g., "did:web:example.com#key-1" -> "did:web:example.com")
+	// The fragment identifies a specific verification method within the DID document
+	baseDID := req.Subject.ID
+	if idx := strings.Index(baseDID, "#"); idx != -1 {
+		baseDID = baseDID[:idx]
+	}
+
+	// Resolve the DID document using the base DID
+	didDoc, err := r.resolveDID(ctx, baseDID)
 	if err != nil {
 		return &authzen.EvaluationResponse{
 			Decision: false,
@@ -136,14 +149,14 @@ func (r *DIDWebRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 		}, nil
 	}
 
-	// Verify that the DID document ID matches the requested DID
-	if didDoc.ID != req.Subject.ID {
+	// Verify that the DID document ID matches the base DID (without fragment)
+	if didDoc.ID != baseDID {
 		return &authzen.EvaluationResponse{
 			Decision: false,
 			Context: &authzen.EvaluationResponseContext{
 				Reason: map[string]interface{}{
 					"error":       "DID document ID does not match requested DID",
-					"requested":   req.Subject.ID,
+					"requested":   baseDID,
 					"document_id": didDoc.ID,
 				},
 			},
@@ -270,6 +283,11 @@ func (r *DIDWebRegistry) resolveDID(ctx context.Context, did string) (*DIDDocume
 	httpURL, err := didToHTTPURL(did)
 	if err != nil {
 		return nil, fmt.Errorf("invalid did:web identifier: %w", err)
+	}
+
+	// For testing: allow HTTP instead of HTTPS
+	if r.allowHTTP {
+		httpURL = strings.Replace(httpURL, "https://", "http://", 1)
 	}
 
 	// Create HTTP request with context
@@ -496,4 +514,10 @@ func (r *DIDWebRegistry) Healthy() bool {
 func (r *DIDWebRegistry) Refresh(ctx context.Context) error {
 	// No cached data to refresh for did:web
 	return nil
+}
+
+// SetHTTPClient sets a custom HTTP client for the registry.
+// This is useful for testing with mock servers or custom transport configurations.
+func (r *DIDWebRegistry) SetHTTPClient(client *http.Client) {
+	r.httpClient = client
 }
