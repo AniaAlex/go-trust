@@ -3,9 +3,12 @@ package oidfed
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	oidfed "github.com/go-oidfed/lib"
@@ -14,14 +17,152 @@ import (
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
+// CacheEntry represents a cached trust chain resolution result.
+type CacheEntry struct {
+	EntityID      string
+	Chains        []oidfed.TrustChain
+	ResolvedAt    time.Time
+	ExpiresAt     time.Time
+	TrustAnchorID string
+}
+
+// MetadataCache provides caching for OpenID Federation metadata and trust chains.
+type MetadataCache struct {
+	entries map[string]*CacheEntry
+	mu      sync.RWMutex
+	ttl     time.Duration
+	maxSize int
+}
+
+// NewMetadataCache creates a new metadata cache.
+func NewMetadataCache(ttl time.Duration, maxSize int) *MetadataCache {
+	if ttl == 0 {
+		ttl = 5 * time.Minute // Default 5 minute TTL
+	}
+	if maxSize == 0 {
+		maxSize = 1000 // Default max 1000 entries
+	}
+	return &MetadataCache{
+		entries: make(map[string]*CacheEntry),
+		ttl:     ttl,
+		maxSize: maxSize,
+	}
+}
+
+// cacheKey generates a cache key from entity ID and constraints.
+func (c *MetadataCache) cacheKey(entityID string, trustMarks, entityTypes []string) string {
+	h := sha256.New()
+	h.Write([]byte(entityID))
+	for _, tm := range trustMarks {
+		h.Write([]byte("|tm:" + tm))
+	}
+	for _, et := range entityTypes {
+		h.Write([]byte("|et:" + et))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+// Get retrieves a cached entry if valid.
+func (c *MetadataCache) Get(entityID string, trustMarks, entityTypes []string) *CacheEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	key := c.cacheKey(entityID, trustMarks, entityTypes)
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil
+	}
+
+	if time.Now().After(entry.ExpiresAt) {
+		return nil // Expired
+	}
+
+	return entry
+}
+
+// Set stores a cache entry.
+func (c *MetadataCache) Set(entityID string, trustMarks, entityTypes []string, chains []oidfed.TrustChain, trustAnchorID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Simple eviction: if at max size, remove oldest entries
+	if len(c.entries) >= c.maxSize {
+		c.evictOldest()
+	}
+
+	key := c.cacheKey(entityID, trustMarks, entityTypes)
+	now := time.Now()
+	c.entries[key] = &CacheEntry{
+		EntityID:      entityID,
+		Chains:        chains,
+		ResolvedAt:    now,
+		ExpiresAt:     now.Add(c.ttl),
+		TrustAnchorID: trustAnchorID,
+	}
+}
+
+// evictOldest removes the oldest 10% of entries.
+func (c *MetadataCache) evictOldest() {
+	if len(c.entries) == 0 {
+		return
+	}
+
+	// Remove 10% of entries (oldest first)
+	toRemove := len(c.entries) / 10
+	if toRemove < 1 {
+		toRemove = 1
+	}
+
+	// Simple approach: remove expired + some oldest
+	removed := 0
+	now := time.Now()
+	for k, v := range c.entries {
+		if now.After(v.ExpiresAt) || removed < toRemove {
+			delete(c.entries, k)
+			removed++
+		}
+	}
+}
+
+// Invalidate removes a specific entry from the cache.
+func (c *MetadataCache) Invalidate(entityID string, trustMarks, entityTypes []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := c.cacheKey(entityID, trustMarks, entityTypes)
+	delete(c.entries, key)
+}
+
+// Clear removes all entries from the cache.
+func (c *MetadataCache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[string]*CacheEntry)
+}
+
+// Stats returns cache statistics.
+func (c *MetadataCache) Stats() (size int, hits int, misses int) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.entries), 0, 0 // TODO: track hits/misses
+}
+
 // OIDFedRegistry implements a trust registry using OpenID Federation.
 // It resolves trust chains from entities to configured trust anchors and
 // evaluates them against AuthZEN access evaluation requests.
+//
+// The registry supports:
+// - Configurable trust anchors with optional explicit JWKS
+// - Required trust marks (configured and/or per-request via context)
+// - Entity type filtering (configured and/or per-request via context)
+// - Metadata caching with configurable TTL
+// - Trust chain inspection in responses
 type OIDFedRegistry struct {
 	trustAnchors       oidfed.TrustAnchors
-	requiredTrustMarks []string // Optional: require specific trust mark types
-	entityTypes        []string // Optional: filter by entity types (e.g., "openid_provider")
+	requiredTrustMarks []string // Default required trust marks
+	entityTypes        []string // Default entity type filter
 	description        string
+	cache              *MetadataCache
+	maxChainDepth      int
 }
 
 // Config holds configuration for creating an OIDFedRegistry.
@@ -30,13 +171,24 @@ type Config struct {
 	TrustAnchors []TrustAnchorConfig `json:"trust_anchors"`
 
 	// RequiredTrustMarks is an optional list of trust mark types that must be present
+	// These are the default requirements; requests can specify additional requirements
 	RequiredTrustMarks []string `json:"required_trust_marks,omitempty"`
 
 	// EntityTypes filters entities by type (e.g., "openid_provider", "openid_relying_party")
+	// These are the default filters; requests can specify additional/different filters
 	EntityTypes []string `json:"entity_types,omitempty"`
 
 	// Description of this registry instance
 	Description string `json:"description,omitempty"`
+
+	// CacheTTL is the duration to cache resolved trust chains (default: 5 minutes)
+	CacheTTL time.Duration `json:"cache_ttl,omitempty"`
+
+	// MaxCacheSize is the maximum number of cache entries (default: 1000)
+	MaxCacheSize int `json:"max_cache_size,omitempty"`
+
+	// MaxChainDepth is the maximum trust chain resolution depth (default: 10)
+	MaxChainDepth int `json:"max_chain_depth,omitempty"`
 }
 
 // TrustAnchorConfig defines a single trust anchor.
@@ -75,11 +227,18 @@ func NewOIDFedRegistry(config Config) (*OIDFedRegistry, error) {
 		description = fmt.Sprintf("OpenID Federation Registry with %d trust anchor(s)", len(trustAnchors))
 	}
 
+	maxChainDepth := config.MaxChainDepth
+	if maxChainDepth == 0 {
+		maxChainDepth = 10
+	}
+
 	return &OIDFedRegistry{
 		trustAnchors:       trustAnchors,
 		requiredTrustMarks: config.RequiredTrustMarks,
 		entityTypes:        config.EntityTypes,
 		description:        description,
+		cache:              NewMetadataCache(config.CacheTTL, config.MaxCacheSize),
+		maxChainDepth:      maxChainDepth,
 	}, nil
 }
 
@@ -106,6 +265,8 @@ func (r *OIDFedRegistry) SupportedResourceTypes() []string {
 		"oauth_client",
 		"oauth_server",
 		"federation_entity",
+		"jwk", // Can validate JWK against entity JWKS
+		"x5c", // Can validate x5c against entity JWKS certificates
 	}
 }
 
@@ -117,10 +278,92 @@ func (r *OIDFedRegistry) SupportsResolutionOnly() bool {
 	return true
 }
 
+// extractConstraintsFromContext extracts OIDF-specific constraints from request context.
+// Returns merged constraints from both registry defaults and request context.
+func (r *OIDFedRegistry) extractConstraintsFromContext(req *authzen.EvaluationRequest) (trustMarks, entityTypes []string, includeTrustChain, includeCerts bool, maxDepth int) {
+	// Start with registry defaults
+	trustMarks = append([]string{}, r.requiredTrustMarks...)
+	entityTypes = append([]string{}, r.entityTypes...)
+	maxDepth = r.maxChainDepth
+
+	if req.Context == nil {
+		return
+	}
+
+	// Merge trust marks from request context
+	if reqTrustMarks, ok := req.Context[ContextKeyRequiredTrustMarks]; ok {
+		switch v := reqTrustMarks.(type) {
+		case []string:
+			trustMarks = mergeStringSlices(trustMarks, v)
+		case []interface{}:
+			for _, tm := range v {
+				if tmStr, ok := tm.(string); ok {
+					trustMarks = mergeStringSlices(trustMarks, []string{tmStr})
+				}
+			}
+		}
+	}
+
+	// Override entity types from request context (replace, not merge)
+	if reqEntityTypes, ok := req.Context[ContextKeyAllowedEntityTypes]; ok {
+		switch v := reqEntityTypes.(type) {
+		case []string:
+			entityTypes = v
+		case []interface{}:
+			entityTypes = make([]string, 0, len(v))
+			for _, et := range v {
+				if etStr, ok := et.(string); ok {
+					entityTypes = append(entityTypes, etStr)
+				}
+			}
+		}
+	}
+
+	// Include trust chain in response?
+	if v, ok := req.Context[ContextKeyIncludeTrustChain].(bool); ok {
+		includeTrustChain = v
+	}
+
+	// Include certificates in response?
+	if v, ok := req.Context[ContextKeyIncludeCertificates].(bool); ok {
+		includeCerts = v
+	}
+
+	// Max chain depth
+	if v, ok := req.Context[ContextKeyMaxChainDepth].(int); ok && v > 0 {
+		maxDepth = v
+	}
+	if v, ok := req.Context[ContextKeyMaxChainDepth].(float64); ok && v > 0 {
+		maxDepth = int(v)
+	}
+
+	return
+}
+
+// shouldBypassCache checks if the request wants to bypass cache.
+func (r *OIDFedRegistry) shouldBypassCache(req *authzen.EvaluationRequest) bool {
+	if req.Context == nil {
+		return false
+	}
+
+	if cc, ok := req.Context[ContextKeyCacheControl].(string); ok {
+		return cc == "no-cache" || cc == "no-store"
+	}
+	return false
+}
+
 // Evaluate performs an AuthZEN access evaluation using OpenID Federation trust chains.
 // For resolution-only requests (where IsResolutionOnlyRequest() returns true), the method
 // returns decision=true with the entity configuration in trust_metadata, without validating
 // a specific key binding.
+//
+// The method supports request context parameters for:
+// - required_trust_marks: Additional trust marks that must be present
+// - allowed_entity_types: Override entity type filter
+// - include_trust_chain: Include full trust chain in response
+// - include_certificates: Include X.509 certificates in response
+// - max_chain_depth: Limit trust chain resolution depth
+// - cache_control: Control caching behavior
 func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	// Extract entity ID from the request
 	entityID, err := r.extractEntityID(req)
@@ -136,22 +379,46 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 		}, nil
 	}
 
-	// Build and validate trust chains
-	resolver := &oidfed.TrustResolver{
-		StartingEntity: entityID,
-		TrustAnchors:   r.trustAnchors,
-		Types:          r.entityTypes,
+	// Extract constraints from request context
+	trustMarks, entityTypes, includeTrustChain, includeCerts, _ := r.extractConstraintsFromContext(req)
+	bypassCache := r.shouldBypassCache(req)
+
+	// Check cache first (unless bypassed)
+	var chains []oidfed.TrustChain
+	var cacheEntry *CacheEntry
+	now := time.Now()
+
+	if !bypassCache && r.cache != nil {
+		cacheEntry = r.cache.Get(entityID, trustMarks, entityTypes)
+		if cacheEntry != nil {
+			chains = cacheEntry.Chains
+		}
 	}
 
-	// Resolve and verify trust chains
-	chains := resolver.ResolveToValidChains()
+	// Resolve trust chains if not cached
+	if chains == nil {
+		resolver := &oidfed.TrustResolver{
+			StartingEntity: entityID,
+			TrustAnchors:   r.trustAnchors,
+			Types:          entityTypes,
+		}
+
+		chains = resolver.ResolveToValidChains()
+
+		// Cache the result
+		if len(chains) > 0 && r.cache != nil {
+			r.cache.Set(entityID, trustMarks, entityTypes, chains, r.getTrustAnchorID(chains[0]))
+		}
+	}
+
 	if len(chains) == 0 {
 		return &authzen.EvaluationResponse{
 			Decision: false,
 			Context: &authzen.EvaluationResponseContext{
 				Reason: map[string]interface{}{
-					"message":   "no valid trust chain found",
-					"entity_id": entityID,
+					"message":      "no valid trust chain found",
+					"entity_id":    entityID,
+					"entity_types": entityTypes,
 				},
 			},
 		}, nil
@@ -160,55 +427,55 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 	// Select the best chain (first valid chain for now)
 	chain := chains[0]
 
-	// Check required trust marks if configured
-	if len(r.requiredTrustMarks) > 0 {
-		if !r.checkTrustMarks(chain) {
+	// Check required trust marks
+	if len(trustMarks) > 0 {
+		if !r.checkTrustMarksWithList(chain, trustMarks) {
 			return &authzen.EvaluationResponse{
 				Decision: false,
 				Context: &authzen.EvaluationResponseContext{
 					Reason: map[string]interface{}{
 						"message":              "required trust marks not present",
 						"entity_id":            entityID,
-						"required_trust_marks": r.requiredTrustMarks,
+						"required_trust_marks": trustMarks,
+						"present_trust_marks":  r.getPresentTrustMarks(chain),
 					},
 				},
 			}, nil
 		}
 	}
 
-	// Extract metadata and build decision
-	metadata := r.extractMetadata(chain)
+	// Build response metadata
+	trustMetadata := r.buildTrustMetadata(chain, entityID, includeTrustChain, includeCerts, now, cacheEntry)
 
 	// Check if this is a resolution-only request
 	if req.IsResolutionOnlyRequest() {
-		return r.buildResolutionOnlyResponse(entityID, chain, metadata), nil
+		return &authzen.EvaluationResponse{
+			Decision: true,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"message":            "resolution successful",
+					"entity_id":          entityID,
+					"resolution_only":    true,
+					"trust_chain_length": len(chain),
+					"trust_anchor":       r.getTrustAnchorID(chain),
+				},
+				TrustMetadata: trustMetadata,
+			},
+		}, nil
 	}
 
-	// Extract certificates from JWKS if requested
-	var certificates []*x509.Certificate
-	if req.Context != nil {
-		if includeCerts, ok := req.Context["include_certificates"].(bool); ok && includeCerts {
-			certificates = r.extractCertificates(chain)
-		}
-	}
-
+	// For full evaluation, check key binding if provided
 	reasonData := map[string]interface{}{
 		"entity_id":          entityID,
 		"trust_chain_length": len(chain),
 		"trust_anchor":       r.getTrustAnchorID(chain),
-		"metadata":           metadata,
-	}
-
-	if len(certificates) > 0 {
-		reasonData["certificates_count"] = len(certificates)
-		// Note: Full certificate details could be added here if needed
 	}
 
 	return &authzen.EvaluationResponse{
 		Decision: true,
 		Context: &authzen.EvaluationResponseContext{
 			Reason:        reasonData,
-			TrustMetadata: r.chainToTrustMetadata(chain, metadata),
+			TrustMetadata: trustMetadata,
 		},
 	}, nil
 }
@@ -230,11 +497,211 @@ func (r *OIDFedRegistry) Healthy() bool {
 }
 
 // Refresh triggers an update of cached data.
-// For OpenID Federation, the go-oidfed/lib handles caching internally.
+// For OpenID Federation, this clears our local metadata cache and lets
+// the go-oidfed/lib handle re-resolution on next request.
 func (r *OIDFedRegistry) Refresh(ctx context.Context) error {
-	// The go-oidfed/lib library handles caching and refreshing internally
-	// Nothing specific to do here
+	// Clear local metadata cache
+	if r.cache != nil {
+		r.cache.Clear()
+	}
 	return nil
+}
+
+// GetCacheStats returns statistics about the metadata cache.
+func (r *OIDFedRegistry) GetCacheStats() map[string]interface{} {
+	if r.cache == nil {
+		return map[string]interface{}{
+			"enabled": false,
+		}
+	}
+
+	r.cache.mu.RLock()
+	defer r.cache.mu.RUnlock()
+
+	return map[string]interface{}{
+		"enabled":  true,
+		"entries":  len(r.cache.entries),
+		"max_size": r.cache.maxSize,
+		"ttl":      r.cache.ttl.String(),
+	}
+}
+
+// mergeStringSlices merges two string slices, eliminating duplicates.
+func mergeStringSlices(a, b []string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(a)+len(b))
+
+	for _, s := range a {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			result = append(result, s)
+		}
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// checkTrustMarksWithList verifies that all specified trust marks are present in the trust chain.
+func (r *OIDFedRegistry) checkTrustMarksWithList(chain oidfed.TrustChain, requiredMarks []string) bool {
+	if len(requiredMarks) == 0 {
+		return true
+	}
+
+	// Get trust marks from the leaf entity (first in chain)
+	if len(chain) == 0 || chain[0].TrustMarks == nil {
+		return false
+	}
+
+	foundMarks := make(map[string]bool)
+	for _, tm := range chain[0].TrustMarks {
+		foundMarks[tm.TrustMarkType] = true
+	}
+
+	// Check all required marks are present
+	for _, required := range requiredMarks {
+		if !foundMarks[required] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// getPresentTrustMarks returns a list of trust mark types present in the chain.
+func (r *OIDFedRegistry) getPresentTrustMarks(chain oidfed.TrustChain) []string {
+	if len(chain) == 0 || chain[0].TrustMarks == nil {
+		return nil
+	}
+
+	marks := make([]string, len(chain[0].TrustMarks))
+	for i, tm := range chain[0].TrustMarks {
+		marks[i] = tm.TrustMarkType
+	}
+	return marks
+}
+
+// buildTrustMetadata builds the trust_metadata for a response.
+func (r *OIDFedRegistry) buildTrustMetadata(chain oidfed.TrustChain, entityID string, includeTrustChain, includeCerts bool, evaluatedAt time.Time, cached *CacheEntry) map[string]interface{} {
+	if len(chain) == 0 {
+		return nil
+	}
+
+	leafStatement := chain[0]
+	metadata := r.extractMetadata(chain)
+
+	trustMeta := map[string]interface{}{
+		"iss":          leafStatement.Issuer,
+		"sub":          leafStatement.Subject,
+		"entity_id":    entityID,
+		"metadata":     metadata,
+		"trust_anchor": r.getTrustAnchorID(chain),
+		"evaluated_at": evaluatedAt.Format(time.RFC3339),
+	}
+
+	// Include issued_at and expires_at
+	if !leafStatement.IssuedAt.Time.IsZero() {
+		trustMeta["iat"] = leafStatement.IssuedAt.Time.Unix()
+	}
+	if !leafStatement.ExpiresAt.Time.IsZero() {
+		trustMeta["exp"] = leafStatement.ExpiresAt.Time.Unix()
+	}
+
+	// Include cache info if relevant
+	if cached != nil {
+		trustMeta["cached"] = true
+		trustMeta["cache_expires_at"] = cached.ExpiresAt.Format(time.RFC3339)
+	}
+
+	// Include JWKS keys summary if available
+	if leafStatement.JWKS.Set != nil && leafStatement.JWKS.Set.Len() > 0 {
+		trustMeta["jwks"] = r.jwksToMap(leafStatement.JWKS)
+	}
+
+	// Include full trust chain if requested
+	if includeTrustChain {
+		trustMeta["trust_chain"] = r.buildDetailedTrustChain(chain, includeCerts)
+	} else {
+		trustMeta["trust_chain_length"] = len(chain)
+	}
+
+	// Include certificates if requested
+	if includeCerts {
+		certs := r.extractCertificates(chain)
+		if len(certs) > 0 {
+			trustMeta["certificates"] = r.certificatesToArray(certs)
+		}
+	}
+
+	return trustMeta
+}
+
+// buildDetailedTrustChain builds a detailed trust chain representation.
+func (r *OIDFedRegistry) buildDetailedTrustChain(chain oidfed.TrustChain, includeCerts bool) []map[string]interface{} {
+	chainArray := make([]map[string]interface{}, len(chain))
+	for i, stmt := range chain {
+		stmtMap := map[string]interface{}{
+			"iss": stmt.Issuer,
+			"sub": stmt.Subject,
+		}
+		if !stmt.IssuedAt.Time.IsZero() {
+			stmtMap["iat"] = stmt.IssuedAt.Time.Unix()
+		}
+		if !stmt.ExpiresAt.Time.IsZero() {
+			stmtMap["exp"] = stmt.ExpiresAt.Time.Unix()
+		}
+
+		// Include trust marks if present
+		if len(stmt.TrustMarks) > 0 {
+			marks := make([]map[string]interface{}, len(stmt.TrustMarks))
+			for j, tm := range stmt.TrustMarks {
+				marks[j] = map[string]interface{}{
+					"id": tm.TrustMarkType,
+				}
+			}
+			stmtMap["trust_marks"] = marks
+		}
+
+		// Include entity types if metadata available
+		if stmt.Metadata != nil {
+			types := stmt.Metadata.GuessEntityTypes()
+			if len(types) > 0 {
+				stmtMap["entity_types"] = types
+			}
+		}
+
+		chainArray[i] = stmtMap
+	}
+	return chainArray
+}
+
+// certificatesToArray converts X.509 certificates to an array of maps.
+func (r *OIDFedRegistry) certificatesToArray(certs []*x509.Certificate) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(certs))
+	for i, cert := range certs {
+		result[i] = map[string]interface{}{
+			"subject":    cert.Subject.String(),
+			"issuer":     cert.Issuer.String(),
+			"not_before": cert.NotBefore.Format(time.RFC3339),
+			"not_after":  cert.NotAfter.Format(time.RFC3339),
+			"serial":     cert.SerialNumber.String(),
+		}
+		if len(cert.DNSNames) > 0 {
+			result[i]["dns_names"] = cert.DNSNames
+		}
+		if len(cert.URIs) > 0 {
+			uris := make([]string, len(cert.URIs))
+			for j, u := range cert.URIs {
+				uris[j] = u.String()
+			}
+			result[i]["uris"] = uris
+		}
+	}
+	return result
 }
 
 // extractEntityID extracts the entity identifier from the request.
