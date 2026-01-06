@@ -40,7 +40,6 @@ testdata/postgres
 bin/
 dist/
 build/
-Dockerfile
 
 # Temporary files
 tmp/

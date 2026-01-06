@@ -50,8 +50,8 @@ changelog:
 
 dockers:
   - image_templates:
-      - "ghcr.io/sunet/{{ .ProjectName }}:{{ .Version }}"
-      - "ghcr.io/sunet/{{ .ProjectName }}:latest"
+      - "ghcr.io/sirosfoundation/{{ .ProjectName }}:{{ .Version }}"
+      - "ghcr.io/sirosfoundation/{{ .ProjectName }}:latest"
     dockerfile: Dockerfile.goreleaser
     build_flag_templates:
       - "--label=org.opencontainers.image.created={{.Date}}"
