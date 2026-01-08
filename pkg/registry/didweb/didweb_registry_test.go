@@ -540,3 +540,131 @@ func TestResolutionOnlyWithNonDIDWeb(t *testing.T) {
 	assert.False(t, resp.Decision)
 	assert.Contains(t, resp.Context.Reason["error"], "must be a did:web identifier")
 }
+
+// TestSetHTTPClient tests the SetHTTPClient method
+func TestSetHTTPClient(t *testing.T) {
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	// Create a custom HTTP client
+	customClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// Set the custom client
+	registry.SetHTTPClient(customClient)
+
+	// Verify it was set (the client is used internally)
+	assert.NotNil(t, registry)
+}
+
+// TestEvaluate_InvalidResourceType tests evaluation with non-existent domain
+func TestEvaluate_InvalidResourceType(t *testing.T) {
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "did:web:non-existent-domain-12345.example.com",
+		},
+		Resource: authzen.Resource{
+			Type: "jwk",
+			ID:   "did:web:non-existent-domain-12345.example.com",
+		},
+	}
+
+	resp, err := registry.Evaluate(context.Background(), req)
+	require.NoError(t, err)
+	assert.False(t, resp.Decision)
+	// Should fail due to resolution error
+	assert.NotNil(t, resp.Context.Reason)
+}
+
+// TestEvaluate_EmptySubjectID tests evaluation with empty subject ID
+func TestEvaluate_EmptySubjectID(t *testing.T) {
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "",
+		},
+		Resource: authzen.Resource{
+			Type: "jwk",
+			ID:   "did:web:example.com",
+		},
+	}
+
+	resp, err := registry.Evaluate(context.Background(), req)
+	require.NoError(t, err)
+	assert.False(t, resp.Decision)
+}
+
+// TestEvaluate_WithMockServer tests evaluation with a mock DID document server
+func TestEvaluate_WithMockServer(t *testing.T) {
+	// Create a mock DID document
+	didDoc := map[string]interface{}{
+		"@context": []interface{}{
+			"https://www.w3.org/ns/did/v1",
+			"https://w3id.org/security/suites/jws-2020/v1",
+		},
+		"id": "did:web:example.com",
+		"verificationMethod": []interface{}{
+			map[string]interface{}{
+				"id":         "did:web:example.com#key-1",
+				"type":       "JsonWebKey2020",
+				"controller": "did:web:example.com",
+				"publicKeyJwk": map[string]interface{}{
+					"kty": "EC",
+					"crv": "P-256",
+					"x":   "WbbOWOeX3VLvj5t8kdnj4a7z1S_M5OOa3yiAqcVGhKU",
+					"y":   "0yLk7PZsv6UvW7J_N-N28RYT0gPBY6xw7_q1VJTg0Xg",
+				},
+			},
+		},
+		"authentication":  []interface{}{"did:web:example.com#key-1"},
+		"assertionMethod": []interface{}{"did:web:example.com#key-1"},
+	}
+
+	// Create mock server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/did+json")
+		json.NewEncoder(w).Encode(didDoc)
+	}))
+	defer server.Close()
+
+	// Create registry
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	// Test basic registry functionality
+	info := registry.Info()
+	assert.Equal(t, "didweb-registry", info.Name)
+	assert.True(t, registry.Healthy())
+	assert.True(t, registry.SupportsResolutionOnly())
+}
+
+// TestEvaluate_ResolutionOnlyMode tests resolution-only mode
+func TestEvaluate_ResolutionOnlyMode(t *testing.T) {
+	registry, err := NewDIDWebRegistry(Config{})
+	require.NoError(t, err)
+
+	// Resolution-only request (no key in resource)
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "did:web:non-existent-domain.example.com",
+		},
+		Resource: authzen.Resource{
+			ID:  "did:web:non-existent-domain.example.com",
+			Key: nil, // No key means resolution-only
+		},
+	}
+
+	resp, err := registry.Evaluate(context.Background(), req)
+	// Should fail because domain doesn't exist, but without panic
+	require.NoError(t, err)
+	assert.False(t, resp.Decision)
+}

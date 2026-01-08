@@ -558,3 +558,295 @@ func TestRateLimiting_Disabled(t *testing.T) {
 		assert.Equal(t, 200, w.Code, "Request %d should succeed when rate limiting disabled", i+1)
 	}
 }
+
+// TestParseX5CFromArray tests the parseX5CFromArray function
+func TestParseX5CFromArray(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     []interface{}
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "empty key array",
+			key:     []interface{}{},
+			wantErr: true,
+			errMsg:  "resource.key is empty",
+		},
+		{
+			name:    "nil key array",
+			key:     nil,
+			wantErr: true,
+			errMsg:  "resource.key is empty",
+		},
+		{
+			name:    "non-string element",
+			key:     []interface{}{123},
+			wantErr: true,
+			errMsg:  "resource.key[0] is not a string",
+		},
+		{
+			name:    "invalid base64",
+			key:     []interface{}{"not-valid-base64!!!"},
+			wantErr: true,
+			errMsg:  "failed to base64 decode",
+		},
+		{
+			name:    "invalid certificate",
+			key:     []interface{}{base64.StdEncoding.EncodeToString([]byte("not a certificate"))},
+			wantErr: true,
+			errMsg:  "failed to parse certificate",
+		},
+		{
+			name:    "valid certificate",
+			key:     []interface{}{testCertBase64},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			certs, err := parseX5CFromArray(tt.key)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+				assert.Len(t, certs, 1)
+				assert.Equal(t, "Test Cert", certs[0].Subject.CommonName)
+			}
+		})
+	}
+}
+
+// TestParseX5CFromJWK tests the parseX5CFromJWK function
+func TestParseX5CFromJWK(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     []interface{}
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "empty key array",
+			key:     []interface{}{},
+			wantErr: true,
+			errMsg:  "resource.key is empty",
+		},
+		{
+			name:    "nil key array",
+			key:     nil,
+			wantErr: true,
+			errMsg:  "resource.key is empty",
+		},
+		{
+			name:    "non-map element",
+			key:     []interface{}{"not a map"},
+			wantErr: true,
+			errMsg:  "resource.key[0] is not a JWK object (map)",
+		},
+		{
+			name: "no x5c claim",
+			key: []interface{}{
+				map[string]interface{}{
+					"kty": "RSA",
+					"n":   "somevalue",
+				},
+			},
+			wantErr: true,
+			errMsg:  "JWK does not contain x5c claim",
+		},
+		{
+			name: "x5c is not array",
+			key: []interface{}{
+				map[string]interface{}{
+					"kty": "RSA",
+					"x5c": "not an array",
+				},
+			},
+			wantErr: true,
+			errMsg:  "JWK x5c claim is not an array",
+		},
+		{
+			name: "x5c element is not string",
+			key: []interface{}{
+				map[string]interface{}{
+					"kty": "RSA",
+					"x5c": []interface{}{123},
+				},
+			},
+			wantErr: true,
+			errMsg:  "JWK x5c[0] is not a string",
+		},
+		{
+			name: "invalid base64 in x5c",
+			key: []interface{}{
+				map[string]interface{}{
+					"kty": "RSA",
+					"x5c": []interface{}{"not-valid-base64!!!"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "failed to base64 decode JWK x5c[0]",
+		},
+		{
+			name: "invalid certificate in x5c",
+			key: []interface{}{
+				map[string]interface{}{
+					"kty": "RSA",
+					"x5c": []interface{}{base64.StdEncoding.EncodeToString([]byte("not a cert"))},
+				},
+			},
+			wantErr: true,
+			errMsg:  "failed to parse certificate from JWK x5c[0]",
+		},
+		{
+			name: "valid JWK with x5c",
+			key: []interface{}{
+				map[string]interface{}{
+					"kty": "RSA",
+					"x5c": []interface{}{testCertBase64},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			certs, err := parseX5CFromJWK(tt.key)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+				assert.Len(t, certs, 1)
+				assert.Equal(t, "Test Cert", certs[0].Subject.CommonName)
+			}
+		})
+	}
+}
+
+// TestServerContext_WithLogger tests the WithLogger method
+func TestServerContext_WithLogger(t *testing.T) {
+	logger := logging.NewLogger(logging.DebugLevel)
+	serverCtx := NewServerContext(logger)
+
+	// Apply WithLogger method to create a new context with a different logger
+	newLogger := logging.NewLogger(logging.InfoLevel)
+	newCtx := serverCtx.WithLogger(newLogger)
+
+	assert.NotNil(t, newCtx.Logger)
+	assert.NotSame(t, serverCtx, newCtx, "WithLogger should return a new ServerContext")
+}
+
+// TestServerContext_WithLogger_NilLogger tests that WithLogger handles nil logger
+func TestServerContext_WithLogger_NilLogger(t *testing.T) {
+	logger := logging.NewLogger(logging.DebugLevel)
+	serverCtx := NewServerContext(logger)
+
+	// Pass nil logger - should use default
+	newCtx := serverCtx.WithLogger(nil)
+
+	assert.NotNil(t, newCtx.Logger, "WithLogger(nil) should use default logger")
+}
+
+// TestNewServerContext_DefaultValues tests NewServerContext default values
+func TestNewServerContext_DefaultValues(t *testing.T) {
+	logger := logging.NewLogger(logging.InfoLevel)
+	serverCtx := NewServerContext(logger)
+
+	assert.NotNil(t, serverCtx.Logger)
+	assert.NotNil(t, serverCtx.LastProcessed)
+}
+
+// TestLegacyEvaluate tests the legacy evaluation path (when RegistryManager is nil)
+func TestLegacyEvaluate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	logger := logging.NewLogger(logging.InfoLevel)
+	serverCtx := NewServerContext(logger)
+	// Note: RegistryManager is nil, so legacyEvaluate will be called
+	serverCtx.RegistryManager = nil
+
+	router := gin.New()
+	RegisterAPIRoutes(router, serverCtx)
+
+	// Test the evaluation endpoint without RegistryManager - should trigger legacy path
+	body := `{
+		"subject": {
+			"type": "key",
+			"id": "did:example:test"
+		},
+		"resource": {
+			"type": "x5c",
+			"id": "did:example:test",
+			"key": ["dGVzdA=="]
+		}
+	}`
+
+	req := httptest.NewRequest("POST", "/evaluation", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Legacy endpoint should return 200 with decision=false and error message
+	assert.Equal(t, 200, w.Code)
+
+	var resp authzen.EvaluationResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, err)
+	assert.False(t, resp.Decision, "Legacy mode should return false decision")
+	assert.NotNil(t, resp.Context)
+	assert.NotNil(t, resp.Context.Reason)
+	assert.Contains(t, resp.Context.Reason["error"], "legacy mode not supported")
+}
+
+// TestTSLsHandler_EmptyRegistryManager tests TSLsHandler when no ETSI registries exist
+func TestTSLsHandler_EmptyRegistryManager(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	logger := logging.NewLogger(logging.InfoLevel)
+	serverCtx := NewServerContext(logger)
+
+	// Create registry manager with non-ETSI registry
+	mgr := registry.NewRegistryManager(registry.FirstMatch, 10*time.Second)
+	mockReg := &mockTrustRegistry{certPool: x509.NewCertPool()}
+	mgr.Register(mockReg)
+	serverCtx.RegistryManager = mgr
+
+	router := gin.New()
+	RegisterAPIRoutes(router, serverCtx)
+
+	req := httptest.NewRequest("GET", "/tsls", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code)
+	// The response contains registry information
+	assert.Contains(t, w.Body.String(), "registries")
+}
+
+// TestTSLsHandler_NilRegistryManager tests TSLsHandler when RegistryManager is nil
+func TestTSLsHandler_NilRegistryManager(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	logger := logging.NewLogger(logging.InfoLevel)
+	serverCtx := NewServerContext(logger)
+	serverCtx.RegistryManager = nil
+
+	router := gin.New()
+	RegisterAPIRoutes(router, serverCtx)
+
+	req := httptest.NewRequest("GET", "/tsls", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// When RegistryManager is nil, it returns 200 with empty registries
+	assert.Equal(t, 200, w.Code)
+	assert.Contains(t, w.Body.String(), "count")
+}

@@ -376,3 +376,153 @@ func TestCompositeHealthy(t *testing.T) {
 		}
 	})
 }
+
+// TestCompositeRegistryOptions tests the option functions
+func TestCompositeRegistryOptions(t *testing.T) {
+	t.Run("WithThreshold", func(t *testing.T) {
+		reg1 := &MockRegistry{name: "reg1", decision: true, types: []string{"x5c"}}
+		reg2 := &MockRegistry{name: "reg2", decision: false, types: []string{"x5c"}}
+		reg3 := &MockRegistry{name: "reg3", decision: true, types: []string{"x5c"}}
+
+		// Create with threshold of 2 (at least 2 must agree)
+		composite := NewCompositeRegistryWithOptions(
+			"test-threshold",
+			LogicQUORUM,
+			[]TrustRegistry{reg1, reg2, reg3},
+			WithThreshold(2),
+		)
+
+		// Verify it was created successfully
+		if composite == nil {
+			t.Fatal("NewCompositeRegistryWithOptions() returned nil")
+		}
+		info := composite.Info()
+		if info.Name != "test-threshold" {
+			t.Errorf("Info().Name = %s, want test-threshold", info.Name)
+		}
+	})
+
+	t.Run("WithTimeout", func(t *testing.T) {
+		reg1 := &MockRegistry{name: "reg1", decision: true, types: []string{"x5c"}}
+
+		composite := NewCompositeRegistryWithOptions(
+			"test-timeout",
+			LogicAND,
+			[]TrustRegistry{reg1},
+			WithTimeout(5000),
+		)
+
+		// Verify it was created successfully
+		if composite == nil {
+			t.Fatal("NewCompositeRegistryWithOptions() returned nil")
+		}
+	})
+
+	t.Run("WithDescription", func(t *testing.T) {
+		reg1 := &MockRegistry{name: "reg1", decision: true, types: []string{"x5c"}}
+
+		composite := NewCompositeRegistryWithOptions(
+			"test-desc",
+			LogicAND,
+			[]TrustRegistry{reg1},
+			WithDescription("Custom description"),
+		)
+
+		info := composite.Info()
+		if info.Description != "Custom description" {
+			t.Errorf("Description = %s, want 'Custom description'", info.Description)
+		}
+	})
+
+	t.Run("empty registries", func(t *testing.T) {
+		composite := NewCompositeRegistryWithOptions(
+			"test-empty",
+			LogicAND,
+			[]TrustRegistry{},
+		)
+		// Should still create a composite, just with no registries
+		if composite == nil {
+			t.Error("NewCompositeRegistryWithOptions() returned nil")
+		}
+	})
+}
+
+// TestCompositeSupportedResourceTypes tests the SupportedResourceTypes method
+func TestCompositeSupportedResourceTypes(t *testing.T) {
+	t.Run("combines types from all registries", func(t *testing.T) {
+		reg1 := &MockRegistry{name: "reg1", decision: true, types: []string{"x5c"}}
+		reg2 := &MockRegistry{name: "reg2", decision: true, types: []string{"jwk"}}
+		reg3 := &MockRegistry{name: "reg3", decision: true, types: []string{"x5c", "entity"}}
+
+		composite := NewCompositeRegistry("test", LogicAND, reg1, reg2, reg3)
+		types := composite.SupportedResourceTypes()
+
+		// Should have x5c, jwk, and entity
+		typeMap := make(map[string]bool)
+		for _, t := range types {
+			typeMap[t] = true
+		}
+
+		if !typeMap["x5c"] {
+			t.Error("SupportedResourceTypes should include x5c")
+		}
+		if !typeMap["jwk"] {
+			t.Error("SupportedResourceTypes should include jwk")
+		}
+		if !typeMap["entity"] {
+			t.Error("SupportedResourceTypes should include entity")
+		}
+	})
+}
+
+// TestCompositeSupportsResolutionOnly tests the SupportsResolutionOnly method
+func TestCompositeSupportsResolutionOnly(t *testing.T) {
+	t.Run("all support resolution only", func(t *testing.T) {
+		reg1 := &MockRegistry{name: "reg1", decision: true, types: []string{"x5c"}, supportsResolutionOnly: true}
+		reg2 := &MockRegistry{name: "reg2", decision: true, types: []string{"x5c"}, supportsResolutionOnly: true}
+
+		composite := NewCompositeRegistry("test", LogicAND, reg1, reg2)
+
+		if !composite.SupportsResolutionOnly() {
+			t.Error("SupportsResolutionOnly should return true when all registries support it")
+		}
+	})
+
+	t.Run("one does not support resolution only", func(t *testing.T) {
+		reg1 := &MockRegistry{name: "reg1", decision: true, types: []string{"x5c"}, supportsResolutionOnly: true}
+		reg2 := &MockRegistry{name: "reg2", decision: true, types: []string{"x5c"}, supportsResolutionOnly: false}
+
+		composite := NewCompositeRegistry("test", LogicAND, reg1, reg2)
+
+		if composite.SupportsResolutionOnly() {
+			t.Error("SupportsResolutionOnly should return false when any registry does not support it")
+		}
+	})
+}
+
+// TestCompositeRefresh tests the Refresh method
+func TestCompositeRefresh(t *testing.T) {
+	t.Run("refresh all registries", func(t *testing.T) {
+		reg1 := &MockRegistry{name: "reg1", decision: true, types: []string{"x5c"}}
+		reg2 := &MockRegistry{name: "reg2", decision: true, types: []string{"x5c"}}
+
+		composite := NewCompositeRegistry("test", LogicAND, reg1, reg2)
+
+		err := composite.Refresh(context.Background())
+		if err != nil {
+			t.Errorf("Refresh() error = %v", err)
+		}
+	})
+
+	t.Run("refresh with error", func(t *testing.T) {
+		reg1 := &MockRegistry{name: "reg1", decision: true, types: []string{"x5c"}}
+		reg2 := &MockRegistry{name: "reg2", decision: true, types: []string{"x5c"}, refreshErr: errors.New("refresh failed")}
+
+		composite := NewCompositeRegistry("test", LogicAND, reg1, reg2)
+
+		err := composite.Refresh(context.Background())
+		if err == nil {
+			t.Error("Refresh() should return error when child refresh fails")
+		}
+	})
+}

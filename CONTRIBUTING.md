@@ -20,7 +20,7 @@ This project follows standard open source community guidelines. Please be respec
 
 ### Prerequisites
 
-- Go 1.18 or later
+- Go 1.25 or later
 - Make
 - Git
 - (Optional) Docker for containerized testing

@@ -12,6 +12,7 @@ type MockRegistry struct {
 	decision               bool
 	types                  []string
 	err                    error
+	refreshErr             error
 	supportsResolutionOnly bool
 	trustMetadata          interface{}
 }
@@ -69,9 +70,9 @@ func (m *MockRegistry) Healthy() bool {
 	return m.err == nil
 }
 
-// Refresh is a no-op for mock registries
+// Refresh returns the configured refreshErr for mock registries
 func (m *MockRegistry) Refresh(ctx context.Context) error {
-	return nil
+	return m.refreshErr
 }
 
 // mockRegistryName returns a consistent name for test registries

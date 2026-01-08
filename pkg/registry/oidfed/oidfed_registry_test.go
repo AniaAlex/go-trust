@@ -987,3 +987,389 @@ func TestMetadataKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractEntityID tests the extractEntityID function
+func TestExtractEntityID(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{
+			{EntityID: "https://ta.example.com"},
+		},
+	})
+
+	tests := []struct {
+		name    string
+		req     *authzen.EvaluationRequest
+		wantID  string
+		wantErr bool
+	}{
+		{
+			name: "entity ID from subject.id with https",
+			req: &authzen.EvaluationRequest{
+				Subject: authzen.Subject{
+					Type: "key",
+					ID:   "https://entity.example.com",
+				},
+				Resource: authzen.Resource{
+					Type: "entity",
+				},
+			},
+			wantID:  "https://entity.example.com",
+			wantErr: false,
+		},
+		{
+			name: "entity ID from subject.id with http",
+			req: &authzen.EvaluationRequest{
+				Subject: authzen.Subject{
+					Type: "key",
+					ID:   "http://entity.example.com",
+				},
+				Resource: authzen.Resource{
+					Type: "entity",
+				},
+			},
+			wantID:  "http://entity.example.com",
+			wantErr: false,
+		},
+		{
+			name: "entity ID from resource.id",
+			req: &authzen.EvaluationRequest{
+				Subject: authzen.Subject{
+					Type: "key",
+					ID:   "some-non-url-id",
+				},
+				Resource: authzen.Resource{
+					Type: "entity",
+					ID:   "https://resource-entity.example.com",
+				},
+			},
+			wantID:  "https://resource-entity.example.com",
+			wantErr: false,
+		},
+		{
+			name: "no valid entity ID",
+			req: &authzen.EvaluationRequest{
+				Subject: authzen.Subject{
+					Type: "key",
+					ID:   "not-a-url",
+				},
+				Resource: authzen.Resource{
+					Type: "entity",
+					ID:   "also-not-a-url",
+				},
+			},
+			wantID:  "",
+			wantErr: true,
+		},
+		{
+			name: "empty IDs",
+			req: &authzen.EvaluationRequest{
+				Subject: authzen.Subject{
+					Type: "key",
+					ID:   "",
+				},
+				Resource: authzen.Resource{
+					Type: "entity",
+					ID:   "",
+				},
+			},
+			wantID:  "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotID, err := registry.extractEntityID(tt.req)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("extractEntityID() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if gotID != tt.wantID {
+				t.Errorf("extractEntityID() = %v, want %v", gotID, tt.wantID)
+			}
+		})
+	}
+}
+
+// TestCacheEviction tests cache eviction when max size is reached
+func TestCacheEviction(t *testing.T) {
+	cache := NewMetadataCache(1*time.Hour, 5) // Small cache for testing
+
+	// Fill cache beyond capacity
+	for i := 0; i < 10; i++ {
+		cache.Set(
+			"https://entity"+string(rune('0'+i))+".example.com",
+			nil, nil,
+			nil,
+			"https://ta.example.com",
+		)
+	}
+
+	// Cache size should not exceed maxSize
+	size, _, _ := cache.Stats()
+	if size > 5 {
+		t.Errorf("Cache size = %d, expected <= 5", size)
+	}
+}
+
+// TestCacheInvalidate tests the cache Invalidate function
+func TestCacheInvalidate(t *testing.T) {
+	cache := NewMetadataCache(1*time.Hour, 100)
+
+	entityID := "https://entity.example.com"
+	trustMarks := []string{"https://tm1.example.com"}
+	entityTypes := []string{"openid_relying_party"}
+
+	// Set a cache entry
+	cache.Set(entityID, trustMarks, entityTypes, nil, "https://ta.example.com")
+
+	// Verify entry exists
+	entry := cache.Get(entityID, trustMarks, entityTypes)
+	if entry == nil {
+		t.Error("Cache entry should exist before invalidation")
+	}
+
+	// Invalidate the entry
+	cache.Invalidate(entityID, trustMarks, entityTypes)
+
+	// Verify entry is removed
+	entry = cache.Get(entityID, trustMarks, entityTypes)
+	if entry != nil {
+		t.Error("Cache entry should be nil after invalidation")
+	}
+}
+
+// TestCacheExpiration tests that expired cache entries are not returned
+func TestCacheExpiration(t *testing.T) {
+	cache := NewMetadataCache(10*time.Millisecond, 100) // Very short TTL
+
+	entityID := "https://entity.example.com"
+
+	// Set a cache entry
+	cache.Set(entityID, nil, nil, nil, "https://ta.example.com")
+
+	// Entry should exist immediately
+	entry := cache.Get(entityID, nil, nil)
+	if entry == nil {
+		t.Error("Cache entry should exist immediately after set")
+	}
+
+	// Wait for expiration
+	time.Sleep(20 * time.Millisecond)
+
+	// Entry should be expired
+	entry = cache.Get(entityID, nil, nil)
+	if entry != nil {
+		t.Error("Cache entry should be nil after expiration")
+	}
+}
+
+// TestCacheClear tests the cache Clear function
+func TestCacheClear(t *testing.T) {
+	cache := NewMetadataCache(1*time.Hour, 100)
+
+	// Add multiple entries
+	for i := 0; i < 5; i++ {
+		cache.Set(
+			"https://entity"+string(rune('0'+i))+".example.com",
+			nil, nil,
+			nil,
+			"https://ta.example.com",
+		)
+	}
+
+	// Verify entries exist
+	size, _, _ := cache.Stats()
+	if size != 5 {
+		t.Errorf("Cache size = %d, expected 5", size)
+	}
+
+	// Clear cache
+	cache.Clear()
+
+	// Verify cache is empty
+	size, _, _ = cache.Stats()
+	if size != 0 {
+		t.Errorf("Cache size after clear = %d, expected 0", size)
+	}
+}
+
+// TestCacheKeyGeneration tests that different parameters generate different keys
+func TestCacheKeyGeneration(t *testing.T) {
+	cache := NewMetadataCache(1*time.Hour, 100)
+
+	entityID := "https://entity.example.com"
+
+	// Set entries with different trust marks
+	cache.Set(entityID, []string{"tm1"}, nil, nil, "ta1")
+	cache.Set(entityID, []string{"tm2"}, nil, nil, "ta2")
+
+	// Each should be a separate entry
+	entry1 := cache.Get(entityID, []string{"tm1"}, nil)
+	entry2 := cache.Get(entityID, []string{"tm2"}, nil)
+
+	if entry1 == nil || entry2 == nil {
+		t.Error("Both cache entries should exist")
+	}
+
+	if entry1.TrustAnchorID == entry2.TrustAnchorID {
+		t.Error("Different trust marks should result in different cache entries")
+	}
+}
+
+// TestOIDFedRegistry_SupportsResolutionOnly_True tests that SupportsResolutionOnly returns true
+func TestOIDFedRegistry_SupportsResolutionOnly_True(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{
+			{EntityID: "https://ta.example.com"},
+		},
+	})
+
+	if !registry.SupportsResolutionOnly() {
+		t.Error("SupportsResolutionOnly() = false, want true")
+	}
+}
+
+// TestOIDFedRegistry_GetCacheStats tests the GetCacheStats method
+func TestOIDFedRegistry_GetCacheStats(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{
+			{EntityID: "https://ta.example.com"},
+		},
+		CacheTTL:     5 * time.Minute,
+		MaxCacheSize: 100,
+	})
+
+	// Initially empty
+	stats := registry.GetCacheStats()
+	if stats == nil {
+		t.Fatal("GetCacheStats() returned nil")
+	}
+
+	entries, ok := stats["entries"].(int)
+	if !ok || entries != 0 {
+		t.Errorf("Initial cache entries = %v, want 0", stats["entries"])
+	}
+
+	// Add some entries via the cache
+	registry.cache.Set("https://entity1.example.com", nil, nil, nil, "ta1")
+	registry.cache.Set("https://entity2.example.com", nil, nil, nil, "ta2")
+
+	stats = registry.GetCacheStats()
+	entries, ok = stats["entries"].(int)
+	if !ok || entries != 2 {
+		t.Errorf("Cache entries after adds = %v, want 2", stats["entries"])
+	}
+
+	// Check TTL is reported
+	if _, ok := stats["ttl"]; !ok {
+		t.Error("GetCacheStats() should include ttl")
+	}
+
+	// Check max_size is reported
+	if _, ok := stats["max_size"]; !ok {
+		t.Error("GetCacheStats() should include max_size")
+	}
+
+	// Check enabled is reported
+	if enabled, ok := stats["enabled"].(bool); !ok || !enabled {
+		t.Error("GetCacheStats() should report enabled = true")
+	}
+}
+
+// TestOIDFedRegistry_Evaluate_ResolutionOnlyRequest tests resolution-only evaluation
+func TestOIDFedRegistry_Evaluate_ResolutionOnlyRequest(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{
+			{EntityID: "https://non-existent-ta.example.com"},
+		},
+	})
+
+	// Resolution-only request (no key in resource)
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://entity.example.com",
+		},
+		Resource: authzen.Resource{
+			Type: "entity",
+			ID:   "https://entity.example.com",
+			Key:  nil, // No key = resolution only
+		},
+	}
+
+	resp, err := registry.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+
+	// Should fail because entity doesn't exist, but no panic
+	if resp == nil {
+		t.Fatal("Evaluate() returned nil response")
+	}
+}
+
+// TestOIDFedRegistry_Evaluate_WithTrustMarksContext tests evaluation with trust marks in context
+func TestOIDFedRegistry_Evaluate_WithTrustMarksContext(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{
+			{EntityID: "https://non-existent-ta.example.com"},
+		},
+	})
+
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://entity.example.com",
+		},
+		Resource: authzen.Resource{
+			Type: "entity",
+			ID:   "https://entity.example.com",
+		},
+		Context: map[string]interface{}{
+			"required_trust_marks": []interface{}{"https://example.com/tm1"},
+			"allowed_entity_types": []interface{}{"openid_relying_party"},
+			"include_trust_chain":  true,
+			"include_certificates": true,
+		},
+	}
+
+	resp, err := registry.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+
+	// Should fail because entity doesn't exist
+	if resp == nil {
+		t.Fatal("Evaluate() returned nil response")
+	}
+}
+
+// TestOIDFedRegistry_RefreshClearsCache tests that Refresh clears the cache
+func TestOIDFedRegistry_RefreshClearsCache(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{
+			{EntityID: "https://ta.example.com"},
+		},
+	})
+
+	// Add some cache entries
+	registry.cache.Set("https://entity1.example.com", nil, nil, nil, "ta1")
+	registry.cache.Set("https://entity2.example.com", nil, nil, nil, "ta2")
+
+	size, _, _ := registry.cache.Stats()
+	if size != 2 {
+		t.Errorf("Cache size before refresh = %d, want 2", size)
+	}
+
+	// Refresh should clear the cache
+	err := registry.Refresh(context.Background())
+	if err != nil {
+		t.Errorf("Refresh() error = %v", err)
+	}
+
+	size, _, _ = registry.cache.Stats()
+	if size != 0 {
+		t.Errorf("Cache size after refresh = %d, want 0", size)
+	}
+}
