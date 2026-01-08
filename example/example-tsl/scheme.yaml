@@ -1,7 +1,0 @@
-operatorNames:
-  - language: en
-    value: "Trust List Operator"
-  - language: sv
-    value: "Tillitslistoperatör"
-type: "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists"
-sequenceNumber: 1

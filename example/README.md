@@ -1,179 +1,186 @@
 # Go-Trust Examples
 
-This directory contains example configurations for the go-trust TSL pipeline processing system.
+This directory contains example code and configurations for go-trust, the AuthZEN Trust Decision Point (PDP) server.
+
+## Overview
+
+Go-trust is a multi-framework trust decision engine that evaluates trust across:
+- **ETSI TS 119612** - Trust Status Lists (X.509 certificates)
+- **OpenID Federation** - Entity trust chains  
+- **DID Web** - Decentralized Identifiers
+
+> **Note:** For TSL processing (load, transform, sign, publish), use `tsl-tool` from the [g119612](https://github.com/sirosfoundation/g119612) package. Go-trust consumes pre-processed TSL data.
 
 ## Quick Start
 
+### Running the Server
+
 ```bash
-# Run as CLI tool (one-shot processing)
-gt --no-server example/01-basic-cli.yaml
+# Basic server with ETSI certificate bundle
+go-trust --etsi-cert-bundle /path/to/trusted-certs.pem
 
-# Run as API server
-gt --pipeline example/02-server-pipeline.yaml
+# With TSL files directly
+go-trust --etsi-tsl-files eu-lotl.xml,se-tsl.xml
 
-# Generate a TSL from metadata
-gt --no-server example/03-generate-tsl.yaml
+# With external URL for discovery
+go-trust --external-url https://pdp.example.com --etsi-cert-bundle certs.pem
+
+# Full options
+go-trust \
+  --host 0.0.0.0 \
+  --port 6001 \
+  --etsi-cert-bundle /etc/go-trust/trusted-certs.pem \
+  --external-url https://pdp.example.com \
+  --log-level info \
+  --log-format json
 ```
+
+### Server Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /evaluation` | AuthZEN trust evaluation |
+| `GET /.well-known/authzen-configuration` | PDP discovery document |
+| `GET /status` | Server status |
+| `GET /info` | Registry information |
+| `GET /health` | Kubernetes health check |
+| `GET /ready` | Kubernetes readiness check |
+| `GET /metrics` | Prometheus metrics |
+| `GET /swagger/index.html` | API documentation |
 
 ## Example Files
 
-| File | Description | Use Case |
-|------|-------------|----------|
-| `01-basic-cli.yaml` | Basic command-line processing | CI/CD, cron jobs, one-time transformations |
-| `02-server-pipeline.yaml` | Full server mode with API | Production API server, AuthZEN PDP |
-| `03-generate-tsl.yaml` | Generate TSL from YAML metadata | Creating custom trust lists |
-| `didweb-registry-example.go` | Go code using did:web registry | Programmatic did:web resolution |
-| `testserver-example.go` | Embedded test server usage | Integration testing, mocking |
+| File | Description |
+|------|-------------|
+| `didweb-registry-example.go` | Programmatic did:web registry usage |
+| `testserver-example.go` | Embedded test server for integration testing |
 
-## Pipeline YAML Format
+## Workflow: TSL Processing + PDP Server
 
-Pipeline configurations are YAML files containing a sequence of steps. Each step specifies a function and its arguments:
+For production deployment, use `tsl-tool` (from g119612) to process TSLs and generate certificate bundles:
 
-```yaml
-# Pipeline is a direct list of steps (no 'steps:' key)
-- function-name:
-    - argument1
-    - argument2
+```bash
+# 1. Process TSLs with tsl-tool (in g119612)
+tsl-tool --output trusted-certs.pem pipeline.yaml
 
-- another-function:
-    - argument
+# 2. Run go-trust with the generated certificate bundle
+go-trust --etsi-cert-bundle trusted-certs.pem
 ```
 
-## Available Pipeline Functions
-
-| Function | Description | Arguments |
-|----------|-------------|-----------|
-| `load` | Load TSL from URL or file | `url` or `file-path` |
-| `set-fetch-options` | Configure fetch behavior | `max-depth:N`, `timeout:Ns`, `user-agent:string` |
-| `select` | Build certificate pool | `all`, `status:uri`, `service-type:uri` |
-| `transform` | Apply XSLT transformation | `xslt-path`, `output-dir`, `extension` |
-| `generate_index` | Create HTML index page | `directory`, `title` |
-| `publish` | Write TSL to directory | `output-dir`, optionally `cert.pem`, `key.pem` |
-| `generate` | Create TSL from metadata | `metadata-dir` |
-| `log` | Log a message | `format-string` |
-| `echo` | Echo arguments (debug) | `args...` |
-
-### Function Details
-
-#### `load`
-
-```yaml
-- load:
-    - https://ec.europa.eu/tools/lotl/eu-lotl.xml
-```
-
-#### `set-fetch-options`
+Example `pipeline.yaml` for tsl-tool:
 
 ```yaml
 - set-fetch-options:
-    - max-depth:2              # Follow TSL references N levels deep
-    - timeout:60s              # HTTP request timeout
-    - user-agent:MyApp/1.0     # HTTP User-Agent header
-```
-
-#### `select`
-
-```yaml
-# Select all certificates
+    - timeout:60s
+    - user-agent:TSL-Tool/1.0
+- load:
+    - https://ec.europa.eu/tools/lotl/eu-lotl.xml
 - select:
-    - all
-
-# Filter by service status and type
-- select:
-    - status:http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted
-    - service-type:http://uri.etsi.org/TrstSvc/Svctype/CA/QC
-```
-
-#### `transform`
-
-```yaml
-- transform:
-    - embedded:tsl-to-html.xslt    # Use bundled stylesheet
-    - ./output/html                 # Output directory
-    - html                          # File extension
-```
-
-#### `publish`
-
-```yaml
-# Publish without signing
-- publish:
-    - ./output/xml
-
-# Publish with XML-DSIG signature
-- publish:
-    - ./output/signed
-    - /path/to/cert.pem
-    - /path/to/key.pem
-
-# Publish with tree structure
-- publish:
-    - ./output/tree
-    - tree:territory               # or tree:index
-```
-
-#### `generate`
-
-```yaml
-- generate:
-    - ./metadata-directory
-```
-
-## TSL Generation Metadata Structure
-
-To generate a TSL, create a directory with this structure:
-
-```text
-my-tsl/
-├── scheme.yaml                    # Required: TSL scheme info
-└── providers/
-    └── my-provider/
-        ├── provider.yaml          # Required: Provider info
-        ├── service.yaml           # Required: Service metadata
-        └── cert.pem               # Required: Certificate(s)
-```
-
-See `example-tsl/` for a complete example.
-
-## Command-Line Options
-
-```bash
-# CLI mode (one-shot processing, no server)
-gt --no-server pipeline.yaml
-
-# Server mode
-gt --pipeline pipeline.yaml [options]
-
-# Common options
-  --host 0.0.0.0              # Listen address
-  --port 6001                 # Server port
-  --frequency 5m              # Pipeline refresh interval
-  --external-url URL          # External URL for .well-known discovery
-  --log-level debug           # Log level: debug, info, warn, error
-  --log-format json           # Log format: text, json
+    - reference-depth:2
 ```
 
 ## did:web Registry Example
 
-The `didweb-registry-example.go` file demonstrates programmatic use of the did:web registry for resolving Decentralized Identifiers:
+The `didweb-registry-example.go` demonstrates programmatic use of the did:web registry:
 
 ```go
-// Create a did:web registry
-registry, _ := didweb.NewDIDWebRegistry(didweb.Config{
-    Timeout:     30 * time.Second,
-    Description: "DID Web Resolver",
-})
+package main
 
-// Evaluate an AuthZEN request
-resp, _ := registry.Evaluate(ctx, &authzen.EvaluationRequest{
-    Subject: authzen.Subject{
-        Type: "key",
-        ID:   "did:web:example.com",
-    },
-    Resource: authzen.Resource{
-        Type: "jwk",
-        ID:   "did:web:example.com",
-        Key:  []interface{}{jwkData},
-    },
-})
+import (
+    "context"
+    "time"
+    
+    "github.com/sirosfoundation/go-trust/pkg/authzen"
+    "github.com/sirosfoundation/go-trust/pkg/registry/didweb"
+)
+
+func main() {
+    // Create a did:web registry
+    registry, _ := didweb.NewDIDWebRegistry(didweb.Config{
+        Timeout:     30 * time.Second,
+        Description: "DID Web Resolver",
+    })
+
+    // Evaluate an AuthZEN request
+    resp, _ := registry.Evaluate(context.Background(), &authzen.EvaluationRequest{
+        Subject: authzen.Subject{
+            Type: "key",
+            ID:   "did:web:example.com",
+        },
+        Resource: authzen.Resource{
+            Type: "jwk",
+            ID:   "did:web:example.com",
+            Key:  []interface{}{jwkData}, // JWK to verify
+        },
+    })
+    
+    if resp.Decision {
+        // Key binding verified
+    }
+}
 ```
+
+## Test Server Example
+
+The `testserver-example.go` demonstrates using the embedded test server for integration testing:
+
+```go
+package main
+
+import (
+    "github.com/sirosfoundation/go-trust/pkg/testserver"
+)
+
+func main() {
+    // Create a test server that accepts all requests
+    srv := testserver.NewAcceptAllServer()
+    defer srv.Close()
+    
+    // Use srv.URL() to get the server address
+    // Send AuthZEN requests to the server
+}
+```
+
+## Configuration Options
+
+| Option | Environment Variable | Description | Default |
+|--------|---------------------|-------------|---------|
+| `--host` | - | Listen address | `127.0.0.1` |
+| `--port` | - | Listen port | `6001` |
+| `--external-url` | `GO_TRUST_EXTERNAL_URL` | External URL for discovery | auto-detect |
+| `--etsi-cert-bundle` | - | PEM file with trusted CA certs | - |
+| `--etsi-tsl-files` | - | Comma-separated TSL XML files | - |
+| `--log-level` | - | Log level: debug, info, warn, error | `info` |
+| `--log-format` | - | Log format: text, json | `text` |
+
+## AuthZEN Evaluation Request Format
+
+```json
+{
+  "subject": {
+    "type": "key",
+    "id": "did:web:example.com"
+  },
+  "resource": {
+    "type": "x5c",
+    "id": "did:web:example.com",
+    "key": ["<base64-encoded-certificate>"]
+  },
+  "action": {
+    "name": "http://uri.etsi.org/TrstSvc/Svctype/CA/QC"
+  }
+}
+```
+
+### Resource Types
+
+| Type | Description | Key Format |
+|------|-------------|------------|
+| `x5c` | X.509 certificate chain | Array of base64-encoded DER certificates |
+| `jwk` | JSON Web Key | Array of JWK objects with x5c claim |
+| `entity` | OpenID Federation entity | Entity ID URL |
+
+## Related Projects
+
+- [g119612](https://github.com/sirosfoundation/g119612) - ETSI TSL processing library and `tsl-tool` CLI
+- [go-oidfed/lib](https://github.com/go-oidfed/lib) - OpenID Federation library

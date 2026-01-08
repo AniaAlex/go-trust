@@ -1,7 +1,0 @@
-serviceNames:
-  - language: en
-    value: "Example Certificate Service"
-  - language: sv
-    value: "Exempel Certifikattjänst"
-serviceType: "http://uri.etsi.org/TrstSvc/Svctype/CA/QC"
-status: "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted/"
