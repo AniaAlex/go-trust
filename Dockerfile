@@ -20,7 +20,7 @@ ARG BUILD_DATE=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -X github.com/sirosfoundation/go-trust/pkg/version.Version=${VERSION} -X github.com/sirosfoundation/go-trust/pkg/version.Commit=${COMMIT} -X github.com/sirosfoundation/go-trust/pkg/version.Date=${BUILD_DATE}" \
-    -o gt ./main.go
+    -o gt ./cmd/gt
 
 # Runtime stage - using distroless for minimal attack surface
 FROM gcr.io/distroless/static-debian12
