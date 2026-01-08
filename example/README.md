@@ -1,40 +1,55 @@
 # Go-Trust Examples
 
-This directory contains example code for using go-trust as an AuthZEN PDP server.
+This directory contains configuration examples for running go-trust as an AuthZEN PDP server.
 
-## Example Files
+## Configuration Examples
 
 | File | Description |
 |------|-------------|
-| `didweb-registry-example.go` | Demonstrates programmatic use of the did:web registry |
-| `testserver-example.go` | Shows how to use the embedded test server for integration testing |
+| `config.yaml` | Server configuration file example |
+| `docker-compose.yaml` | Docker Compose deployment |
+| `kubernetes.yaml` | Kubernetes deployment with Ingress and ServiceMonitor |
+| `prometheus.yml` | Prometheus scrape configuration |
 
-## Running Examples
+## Testing Examples
+
+The `testing/` subdirectory contains Go code examples for integration testing:
+- `testing/didweb-registry-example.go` - Using the did:web registry programmatically
+- `testing/testserver-example.go` - Embedded test server for testing AuthZEN clients
+
+## Quick Start
+
+### Running Locally
 
 ```bash
-# DID Web registry example
-go run example/didweb-registry-example.go
+# Build the binary
+make build
 
-# Test server example  
-go run example/testserver-example.go
+# Run with certificate bundle
+./gt --etsi-cert-bundle /path/to/trusted-certs.pem
+
+# Run with config file
+./gt --config example/config.yaml
 ```
 
-## Server Configuration
-
-Go-trust is configured via command-line options, not YAML files:
+### Running with Docker
 
 ```bash
-# Basic usage with certificate bundle
-go-trust --etsi-cert-bundle /path/to/trusted-certs.pem
+# Ensure you have a certificate bundle
+# (generate with tsl-tool from g119612)
 
-# Full configuration
-go-trust \
-  --host 0.0.0.0 \
-  --port 6001 \
-  --etsi-cert-bundle /etc/go-trust/trusted-certs.pem \
-  --external-url https://pdp.example.com \
-  --log-level info \
-  --log-format json
+# Start services
+docker-compose -f example/docker-compose.yaml up -d
+```
+
+### Running on Kubernetes
+
+```bash
+# Apply the manifests
+kubectl apply -f example/kubernetes.yaml
+
+# Check status
+kubectl -n go-trust get pods
 ```
 
 ## TSL Processing
@@ -46,7 +61,7 @@ For TSL processing (load, transform, sign, publish), use `tsl-tool` from [g11961
 tsl-tool --output trusted-certs.pem pipeline.yaml
 
 # Then run go-trust with the generated bundle
-go-trust --etsi-cert-bundle trusted-certs.pem
+./gt --etsi-cert-bundle trusted-certs.pem
 ```
 
 See the main [README](../README.md) for complete documentation.

@@ -31,7 +31,7 @@ make test
 make build
 
 # Run the server (with test certificate bundle)
-./go-trust --etsi-cert-bundle /path/to/certs.pem
+./gt --etsi-cert-bundle /path/to/certs.pem
 ```
 
 ## Development Environment
@@ -77,7 +77,7 @@ go mod download
 ### Building
 
 ```bash
-make build          # Build the binary (output: ./go-trust)
+make build          # Build the binary (output: ./gt)
 make install        # Install to $GOPATH/bin
 make clean          # Remove build artifacts
 ```
@@ -341,10 +341,10 @@ Press `F5` to start debugging with the default configuration.
 
 ```bash
 # Build with debug symbols
-go build -gcflags="all=-N -l" -o go-trust-debug ./cmd/go-trust
+go build -gcflags="all=-N -l" -o gt-debug ./cmd/gt
 
 # Run with delve
-dlv exec ./go-trust-debug -- --etsi-cert-bundle /path/to/certs.pem --log-level debug
+dlv exec ./gt-debug -- --etsi-cert-bundle /path/to/certs.pem --log-level debug
 ```
 
 ### Logging

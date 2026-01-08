@@ -49,23 +49,23 @@ cd go-trust
 make build
 
 # Or install directly
-go install github.com/sirosfoundation/go-trust/cmd/go-trust@latest
+go install github.com/sirosfoundation/go-trust/cmd/gt@latest
 ```
 
 ### Running the Server
 
 ```bash
 # With a PEM certificate bundle (recommended for production)
-go-trust --etsi-cert-bundle /path/to/trusted-certs.pem
+gt --etsi-cert-bundle /path/to/trusted-certs.pem
 
 # With TSL XML files directly
-go-trust --etsi-tsl-files eu-lotl.xml,se-tsl.xml
+gt --etsi-tsl-files eu-lotl.xml,se-tsl.xml
 
 # With external URL for discovery (behind reverse proxy)
-go-trust --external-url https://pdp.example.com --etsi-cert-bundle certs.pem
+gt --external-url https://pdp.example.com --etsi-cert-bundle certs.pem
 
 # Full configuration
-go-trust \
+gt \
   --host 0.0.0.0 \
   --port 6001 \
   --etsi-cert-bundle /etc/go-trust/trusted-certs.pem \
@@ -280,8 +280,8 @@ For production deployment, use `tsl-tool` (from g119612) to process TSLs and gen
 # 1. Process TSLs with tsl-tool
 tsl-tool --output trusted-certs.pem pipeline.yaml
 
-# 2. Run go-trust with the generated certificate bundle
-go-trust --etsi-cert-bundle trusted-certs.pem
+# 2. Run gt with the generated certificate bundle
+gt --etsi-cert-bundle trusted-certs.pem
 ```
 
 Run tsl-tool via cron to update TSL data periodically:
@@ -367,7 +367,7 @@ make quick          # Quick pre-commit checks
 
 ```
 go-trust/
-├── cmd/go-trust/   # Main application
+├── cmd/gt/         # Main application
 ├── pkg/
 │   ├── api/        # HTTP API implementation
 │   ├── authzen/    # AuthZEN protocol types

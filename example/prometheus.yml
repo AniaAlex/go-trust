@@ -1,0 +1,14 @@
+# Prometheus Configuration for Go-Trust
+#
+# Example Prometheus configuration to scrape metrics from go-trust.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'go-trust'
+    static_configs:
+      - targets: ['go-trust:6001']
+    metrics_path: '/metrics'
+    scheme: 'http'

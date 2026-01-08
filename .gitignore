@@ -2,6 +2,7 @@
 output
 gt
 gt-test
+go-trust
 *.exe
 *.exe~
 *.dll
