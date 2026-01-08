@@ -129,7 +129,7 @@
         },
         "/readyz": {
             "get": {
-                "description": "Returns ready status if pipeline has been processed and TSLs are loaded\n\nQuery Parameters:\n- verbose=true: Include detailed TSL information in the response",
+                "description": "Returns ready status if registries have been refreshed and are loaded\n\nQuery Parameters:\n- verbose=true: Include detailed TSL information in the response",
                 "produces": [
                     "application/json"
                 ],
@@ -185,17 +185,17 @@
         },
         "/tsls": {
             "get": {
-                "description": "Returns comprehensive information about all loaded Trust Status Lists\n\nThis is the primary endpoint for retrieving TSL metadata including:\n- Territory codes\n- Sequence numbers\n- Issue and next update dates\n- Service counts per TSL\n- Last processing timestamp",
+                "description": "Returns comprehensive information about all configured trust registries\n\nThis is the primary endpoint for retrieving registry metadata including:\n- Registry names and types\n- Supported resource types\n- Health status\n- Last processing timestamp",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "TSLs"
+                    "Registries"
                 ],
-                "summary": "List Trust Status Lists",
+                "summary": "List Trust Registries",
                 "responses": {
                     "200": {
-                        "description": "count, last_updated, tsls",
+                        "description": "count, last_updated, registries",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true

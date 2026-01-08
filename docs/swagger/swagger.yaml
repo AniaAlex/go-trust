@@ -285,7 +285,7 @@ paths:
   /readyz:
     get:
       description: |-
-        Returns ready status if pipeline has been processed and TSLs are loaded
+        Returns ready status if registries have been refreshed and are loaded
 
         Query Parameters:
         - verbose=true: Include detailed TSL information in the response
@@ -329,25 +329,24 @@ paths:
   /tsls:
     get:
       description: |-
-        Returns comprehensive information about all loaded Trust Status Lists
+        Returns comprehensive information about all configured trust registries
 
-        This is the primary endpoint for retrieving TSL metadata including:
-        - Territory codes
-        - Sequence numbers
-        - Issue and next update dates
-        - Service counts per TSL
+        This is the primary endpoint for retrieving registry metadata including:
+        - Registry names and types
+        - Supported resource types
+        - Health status
         - Last processing timestamp
       produces:
       - application/json
       responses:
         "200":
-          description: count, last_updated, tsls
+          description: count, last_updated, registries
           schema:
             additionalProperties: true
             type: object
-      summary: List Trust Status Lists
+      summary: List Trust Registries
       tags:
-      - TSLs
+      - Registries
 schemes:
 - http
 - https

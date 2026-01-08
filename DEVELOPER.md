@@ -190,6 +190,62 @@ func TestMyFunction_WithValidInput(t *testing.T) {
 }
 ```
 
+### Integration Tests
+
+The project includes comprehensive integration tests that start real HTTP servers and test all API endpoints end-to-end. These tests are located in `cmd/gt/integration_test.go` and use the `integration` build tag.
+
+#### Running Integration Tests
+
+```bash
+# Via make (recommended)
+make test-integration
+
+# Directly with go test
+go test -tags=integration -v ./cmd/gt/...
+```
+
+#### What's Tested
+
+Integration tests cover:
+
+- **Health endpoints**: `/healthz` and `/readyz` for liveness/readiness probes
+- **Metrics endpoint**: `/metrics` for Prometheus metrics
+- **AuthZEN discovery**: `/.well-known/authzen-configuration`
+- **TSL information**: `/tsls` endpoint
+- **Evaluation endpoint**: `/evaluation` with various scenarios:
+  - Valid requests with mock registries
+  - Trusted certificates (generated test CA)
+  - Untrusted certificates
+  - Invalid requests (missing body, malformed JSON)
+- **Concurrent requests**: Tests server under concurrent load
+- **Graceful shutdown**: Tests clean server shutdown
+
+#### Writing Integration Tests
+
+Integration tests use a helper function `startTestServer` that configures and starts a real HTTP server:
+
+```go
+func TestMyIntegration(t *testing.T) {
+    // Start server with generated test certificates and trigger initial refresh
+    ts := startTestServer(t, withGeneratedCerts(), withRefresh())
+    defer ts.Close(t)
+
+    // Make HTTP requests to ts.baseURL
+    resp, err := ts.client.Get(ts.baseURL + "/healthz")
+    require.NoError(t, err)
+    defer resp.Body.Close()
+
+    assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+```
+
+Available options for `startTestServer`:
+
+- `withGeneratedCerts()` - Generate a test CA and certificate bundle
+- `withRefresh()` - Trigger initial registry refresh (for readiness)
+- `withMockRegistry(registry)` - Use a mock registry implementation
+- `withLogLevel(level)` - Set server log level
+
 ### Coverage Goals
 
 - **Overall**: >80%

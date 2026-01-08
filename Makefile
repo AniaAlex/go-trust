@@ -47,10 +47,10 @@ test: check-go-version ## run tests with coverage, race detection, and timeout
 	go tool cover -func=cover.out | tail -n 1 | awk '{ print "Total coverage: " $$3 }'
 
 .PHONY: test-integration
-test-integration: check-go-version build ## run integration tests for main.go (requires RUN_INTEGRATION_TESTS=1)
-	@echo "Running integration tests for main.go..."
-	@echo "Note: These tests start API servers and may take longer to run."
-	cd cmd && RUN_INTEGRATION_TESTS=1 go test -v -timeout 5m
+test-integration: check-go-version build ## run integration tests (start real servers, make HTTP requests)
+	@echo "Running integration tests for go-trust server..."
+	@echo "Note: These tests start HTTP servers and test all API endpoints."
+	go test -tags=integration -v -timeout 5m -count=1 ./cmd/gt/...
 
 .PHONY: test-all
 test-all: test test-integration ## run all tests including integration tests
