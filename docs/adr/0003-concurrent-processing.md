@@ -1,8 +1,13 @@
 # Concurrent TSL Processing with Worker Pools
 
-- Status: Accepted
+- Status: **Superseded** (Moved to g119612/tsl-tool)
 - Deciders: Development Team
 - Date: 2025-10-17
+- Superseded Date: 2025-07-01
+
+> **Note:** This concurrent processing has been moved to [g119612](https://github.com/sirosfoundation/g119612) as part of `tsl-tool`.
+> Go-trust is now solely a PDP server that consumes pre-processed TSL data.
+> See g119612 for current pipeline/concurrent processing implementation.
 
 ## Context and Problem Statement
 

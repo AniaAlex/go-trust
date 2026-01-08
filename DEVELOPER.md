@@ -30,8 +30,8 @@ make test
 # Build the binary
 make build
 
-# Run the server
-./gt --pipeline examples/pipeline.yaml
+# Run the server (with test certificate bundle)
+./go-trust --etsi-cert-bundle /path/to/certs.pem
 ```
 
 ## Development Environment
@@ -39,7 +39,6 @@ make build
 ### Requirements
 
 - **Go**: Version specified in `go.mod` (check with `make check-go-version`)
-- **CGO**: Must be enabled (`CGO_ENABLED=1`)
 - **Git**: For version control and hooks
 
 ### One-Time Setup
@@ -78,7 +77,7 @@ go mod download
 ### Building
 
 ```bash
-make build          # Build the binary (output: ./gt)
+make build          # Build the binary (output: ./go-trust)
 make install        # Install to $GOPATH/bin
 make clean          # Remove build artifacts
 ```
@@ -194,7 +193,7 @@ func TestMyFunction_WithValidInput(t *testing.T) {
 ### Coverage Goals
 
 - **Overall**: >80%
-- **Critical packages** (api, pipeline, dsig): >85%
+- **Critical packages** (api, registry, authzen): >85%
 - Run `make check-coverage` to verify
 
 ## Code Quality
@@ -342,10 +341,10 @@ Press `F5` to start debugging with the default configuration.
 
 ```bash
 # Build with debug symbols
-go build -gcflags="all=-N -l" -o gt-debug ./cmd
+go build -gcflags="all=-N -l" -o go-trust-debug ./cmd/go-trust
 
 # Run with delve
-dlv exec ./gt-debug -- --pipeline examples/pipeline.yaml --log-level debug
+dlv exec ./go-trust-debug -- --etsi-cert-bundle /path/to/certs.pem --log-level debug
 ```
 
 ### Logging
@@ -414,12 +413,13 @@ go tool pprof mem.prof
 4. Update API documentation in `cmd/main.go`
 5. Consider metrics (if appropriate)
 
-### Adding a New Pipeline Function
+### Adding a New Registry Type
 
-1. Create function in `pkg/pipeline/`
-2. Register in `pipeline.go`
+1. Create registry in `pkg/registry/yourregistry/`
+2. Implement `TrustRegistry` interface
 3. Add tests
-4. Update documentation
+4. Register in main.go
+5. Update documentation
 
 ### Updating Dependencies
 
