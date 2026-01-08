@@ -449,8 +449,6 @@ var SwaggerInfo = &swag.Spec{
 	Description:      "Multi-framework trust decision engine providing AuthZEN-based trust evaluation\n\nGo-Trust is a Policy Decision Point (PDP) that evaluates trust across multiple frameworks:\n- ETSI TS 119612 Trust Status Lists (for X.509 certificates)\n- OpenID Federation (for entity trust chains)\n- DID Web (for decentralized identifiers)\n\nThe service provides health/metrics endpoints for production deployment.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
-	LeftDelim:        "{{",
-	RightDelim:       "}}",
 }
 
 func init() {
