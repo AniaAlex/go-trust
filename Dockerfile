@@ -3,8 +3,8 @@ FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-# Install git for fetching dependencies with replace directives
-RUN apk add --no-cache git ca-certificates
+# Install build dependencies (git for deps, gcc/musl for CGO/PKCS#11)
+RUN apk add --no-cache git ca-certificates gcc musl-dev
 
 # Copy go mod files
 COPY go.mod go.sum ./
@@ -14,12 +14,13 @@ RUN go mod download
 COPY . .
 
 # Build with version information
+# CGO required for PKCS#11 support via crypto11
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w -X github.com/sirosfoundation/go-trust/pkg/version.Version=${VERSION} -X github.com/sirosfoundation/go-trust/pkg/version.Commit=${COMMIT} -X github.com/sirosfoundation/go-trust/pkg/version.Date=${BUILD_DATE}" \
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags="-s -w -linkmode external -extldflags '-static' -X github.com/sirosfoundation/go-trust/pkg/version.Version=${VERSION} -X github.com/sirosfoundation/go-trust/pkg/version.Commit=${COMMIT} -X github.com/sirosfoundation/go-trust/pkg/version.Date=${BUILD_DATE}" \
     -o gt ./cmd/gt
 
 # Runtime stage - using distroless for minimal attack surface
