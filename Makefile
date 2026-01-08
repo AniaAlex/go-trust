@@ -30,11 +30,11 @@ check-go-version: ## Check if the current Go version matches the one required by
 
 .PHONY: install
 install: ## Install the binary to GOPATH/bin
-	CGO_ENABLED=1 go install ${LDFLAGS} -trimpath ./cmd/main.go
+	CGO_ENABLED=1 go install ${LDFLAGS} -trimpath ./cmd/go-trust/main.go
 
 .PHONY: run
-run: check-go-version build ## Run the application (requires pipeline.yaml argument)
-	./gt $(ARGS)
+run: check-go-version build ## Run the server
+	./go-trust $(ARGS)
 
 # generate help info from comments: thanks to https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 .PHONY: help
@@ -56,12 +56,12 @@ test-integration: check-go-version build ## run integration tests for main.go (r
 test-all: test test-integration ## run all tests including integration tests
 
 .PHONY: build
-build: check-go-version swagger ## build the library
-	CGO_ENABLED=1 go build ${LDFLAGS} -trimpath -o gt -a ./cmd/main.go
+build: check-go-version swagger ## build the server binary
+	CGO_ENABLED=1 go build ${LDFLAGS} -trimpath -o go-trust -a ./cmd/go-trust/main.go
 
 .PHONY: swagger
 swagger: install-swag ## Generate OpenAPI/Swagger documentation
-	$(GOBIN)/swag init -g main.go --output docs/swagger --exclude pkg/pipeline,pkg/utils 2>&1 | grep -v "warning: failed to evaluate" || true
+	$(GOBIN)/swag init -g cmd/go-trust/main.go --output docs/swagger --exclude pkg/pipeline,pkg/utils 2>&1 | grep -v "warning: failed to evaluate" || true
 	@echo "Swagger documentation generated at docs/swagger/"
 	@echo "View at: http://localhost:6001/swagger/index.html (when server is running)"
 

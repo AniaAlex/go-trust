@@ -373,3 +373,19 @@ func (m *RegistryManager) evaluateSequentialWithPolicy(ctx context.Context, req 
 
 	return m.evaluateSequentialFiltered(ctx, req, registries, policyCtx)
 }
+
+// ListRegistries returns information about all registered registries.
+func (m *RegistryManager) ListRegistries() []RegistryInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	infos := make([]RegistryInfo, len(m.registries))
+	for i, reg := range m.registries {
+		info := reg.Info()
+		info.ResourceTypes = reg.SupportedResourceTypes()
+		info.ResolutionOnly = reg.SupportsResolutionOnly()
+		info.Healthy = reg.Healthy()
+		infos[i] = info
+	}
+	return infos
+}

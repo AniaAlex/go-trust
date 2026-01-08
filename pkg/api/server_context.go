@@ -4,8 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirosfoundation/go-trust/pkg/logging"
-	"github.com/sirosfoundation/go-trust/pkg/pipeline"
+	"github.com/sirosfoundation/g119612/pkg/logging"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
@@ -14,15 +13,11 @@ import (
 // This struct is used by API handlers to access the current state of trust registries
 // for making trust decisions.
 //
-// The ServerContext supports both the new RegistryManager architecture and the legacy
-// PipelineContext for backward compatibility during migration.
-//
 // The ServerContext always has a configured Logger for API operations. If none is provided
 // during initialization, a default logger is used.
 type ServerContext struct {
 	mu              sync.RWMutex              // Mutex for thread-safe access
-	RegistryManager *registry.RegistryManager // Multi-registry manager (new architecture)
-	PipelineContext *pipeline.Context         // Legacy pipeline context (for backward compatibility)
+	RegistryManager *registry.RegistryManager // Multi-registry manager
 	LastProcessed   time.Time                 // Timestamp when data was last processed
 	Logger          logging.Logger            // Logger for API operations (never nil)
 	RateLimiter     *RateLimiter              // Rate limiter for API endpoints (optional)
@@ -70,7 +65,6 @@ func (s *ServerContext) WithLogger(logger logging.Logger) *ServerContext {
 
 	return &ServerContext{
 		RegistryManager: s.RegistryManager,
-		PipelineContext: s.PipelineContext,
 		LastProcessed:   s.LastProcessed,
 		Logger:          logger,
 		RateLimiter:     s.RateLimiter,

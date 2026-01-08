@@ -1,16 +1,12 @@
 package api
 
 import (
-	"fmt"
 	"os"
 	"time"
 
-	"crypto/x509"
-
 	"github.com/gin-gonic/gin"
+	"github.com/sirosfoundation/g119612/pkg/logging"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
-	"github.com/sirosfoundation/go-trust/pkg/logging"
-	"github.com/sirosfoundation/go-trust/pkg/utils/x509util"
 )
 
 // StatusHandler godoc
@@ -32,22 +28,27 @@ func StatusHandler(serverCtx *ServerContext) gin.HandlerFunc {
 
 		serverCtx.RLock()
 		defer serverCtx.RUnlock()
-		tslCount := 0
-		if serverCtx.PipelineContext != nil && serverCtx.PipelineContext.TSLs != nil {
-			tslCount = serverCtx.PipelineContext.TSLs.Size()
-		}
+		tslCount := getRegistryCount(serverCtx)
 
 		// Log the status request with structured logging
 		serverCtx.Logger.Warn("API status request (deprecated endpoint)",
 			logging.F("remote_ip", c.ClientIP()),
-			logging.F("tsl_count", tslCount),
+			logging.F("registry_count", tslCount),
 			logging.F("replacement", "GET /readyz"))
 
 		c.JSON(200, gin.H{
-			"tsl_count":      tslCount,
+			"registry_count": tslCount,
 			"last_processed": serverCtx.LastProcessed.Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
+}
+
+// getRegistryCount returns the number of registered trust registries.
+func getRegistryCount(serverCtx *ServerContext) int {
+	if serverCtx.RegistryManager == nil {
+		return 0
+	}
+	return len(serverCtx.RegistryManager.ListRegistries())
 }
 
 // AuthZENDecisionHandler godoc
@@ -159,96 +160,17 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 	}
 }
 
-// legacyEvaluate implements the old direct CertPool validation for backward compatibility.
-// NOTE: This legacy implementation does NOT support resolution-only requests.
-// For resolution-only support, use the RegistryManager architecture with appropriate registries.
+// legacyEvaluate returns an error indicating legacy mode is no longer supported.
+// Use RegistryManager with TSLRegistry for trust evaluation.
 func legacyEvaluate(serverCtx *ServerContext, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
-	// Check if this is a resolution-only request (not supported in legacy mode)
-	if req.IsResolutionOnlyRequest() {
-		return &authzen.EvaluationResponse{
-			Decision: false,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"error": "resolution-only requests not supported in legacy mode; configure RegistryManager with appropriate registries",
-				},
+	return &authzen.EvaluationResponse{
+		Decision: false,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: map[string]interface{}{
+				"error": "legacy mode not supported; configure RegistryManager with TSLRegistry",
 			},
-		}, nil
-	}
-
-	// Validate request against AuthZEN Trust Registry Profile
-	if err := req.Validate(); err != nil {
-		return &authzen.EvaluationResponse{
-			Decision: false,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"error": fmt.Sprintf("validation error: %v", err),
-				},
-			},
-		}, nil
-	}
-
-	// Extract certificates from resource.key based on resource.type
-	var certs []*x509.Certificate
-	var parseErr error
-
-	if req.Resource.Type == "x5c" {
-		// resource.key is an array of base64-encoded X.509 certificates
-		certs, parseErr = x509util.ParseX5CFromArray(req.Resource.Key)
-	} else {
-		// resource.type == "jwk" - extract certificate from JWK x5c claim
-		certs, parseErr = x509util.ParseX5CFromJWK(req.Resource.Key)
-	}
-
-	if parseErr != nil {
-		return &authzen.EvaluationResponse{
-			Decision: false,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"error": parseErr.Error(),
-				},
-			},
-		}, nil
-	}
-
-	if len(certs) == 0 {
-		return &authzen.EvaluationResponse{
-			Decision: false,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"error": "no certificates found in resource.key",
-				},
-			},
-		}, nil
-	}
-
-	// Validate certificate chain against TSL certificate pool
-	serverCtx.RLock()
-	certPool := serverCtx.PipelineContext.CertPool
-	serverCtx.RUnlock()
-
-	if certPool == nil {
-		return &authzen.EvaluationResponse{
-			Decision: false,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"error": "CertPool is nil",
-				},
-			},
-		}, nil
-	}
-
-	opts := x509.VerifyOptions{
-		Roots: certPool,
-	}
-	_, err := certs[0].Verify(opts)
-
-	if err == nil {
-		resp := buildResponse(true, "")
-		return &resp, nil
-	} else {
-		resp := buildResponse(false, err.Error())
-		return &resp, nil
-	}
+		},
+	}, nil
 }
 
 // InfoHandler godoc
@@ -277,79 +199,82 @@ func InfoHandler(serverCtx *ServerContext) gin.HandlerFunc {
 
 		serverCtx.RLock()
 		defer serverCtx.RUnlock()
-		summaries := make([]map[string]interface{}, 0)
 
-		// Add debug logging to inspect the pipeline context
-		tslSize := 0
-		if serverCtx.PipelineContext != nil && serverCtx.PipelineContext.TSLs != nil {
-			tslSize = serverCtx.PipelineContext.TSLs.Size()
-		}
+		// Return registry info instead of TSL summaries
+		registryInfos := make([]map[string]interface{}, 0)
+		registryCount := 0
 
-		serverCtx.Logger.Debug("API info request (deprecated): Inspecting pipeline context",
-			logging.F("ctx_nil", serverCtx.PipelineContext == nil),
-			logging.F("tsls_nil", serverCtx.PipelineContext == nil || serverCtx.PipelineContext.TSLs == nil),
-			logging.F("tsls_size", tslSize))
-
-		if serverCtx.PipelineContext != nil && serverCtx.PipelineContext.TSLs != nil {
-			for _, tsl := range serverCtx.PipelineContext.TSLs.ToSlice() {
-				if tsl != nil {
-					summaries = append(summaries, tsl.Summary())
-				}
+		if serverCtx.RegistryManager != nil {
+			for _, info := range serverCtx.RegistryManager.ListRegistries() {
+				registryInfos = append(registryInfos, map[string]interface{}{
+					"name":            info.Name,
+					"type":            info.Type,
+					"description":     info.Description,
+					"resource_types":  info.ResourceTypes,
+					"resolution_only": info.ResolutionOnly,
+					"healthy":         info.Healthy,
+				})
 			}
+			registryCount = len(registryInfos)
 		}
 
 		// Log info request with structured logging
 		serverCtx.Logger.Warn("API info request (deprecated endpoint)",
 			logging.F("remote_ip", c.ClientIP()),
-			logging.F("summary_count", len(summaries)),
+			logging.F("registry_count", registryCount),
 			logging.F("replacement", "GET /tsls"))
 
 		c.JSON(200, gin.H{
-			"tsl_summaries": summaries,
+			"registries": registryInfos,
 		})
 	}
 }
 
 // TSLsHandler godoc
-// @Summary List Trust Status Lists
-// @Description Returns comprehensive information about all loaded Trust Status Lists
+// @Summary List Trust Registries
+// @Description Returns comprehensive information about all configured trust registries
 // @Description
-// @Description This is the primary endpoint for retrieving TSL metadata including:
-// @Description - Territory codes
-// @Description - Sequence numbers
-// @Description - Issue and next update dates
-// @Description - Service counts per TSL
+// @Description This is the primary endpoint for retrieving registry metadata including:
+// @Description - Registry names and types
+// @Description - Supported resource types
+// @Description - Health status
 // @Description - Last processing timestamp
-// @Tags TSLs
+// @Tags Registries
 // @Produce json
-// @Success 200 {object} map[string]interface{} "count, last_updated, tsls"
+// @Success 200 {object} map[string]interface{} "count, last_updated, registries"
 // @Router /tsls [get]
 func TSLsHandler(serverCtx *ServerContext) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		serverCtx.RLock()
 		defer serverCtx.RUnlock()
 
-		summaries := make([]map[string]interface{}, 0)
-		tslCount := 0
+		registryInfos := make([]map[string]interface{}, 0)
+		registryCount := 0
 		lastUpdated := serverCtx.LastProcessed.Format(time.RFC3339)
 
-		if serverCtx.PipelineContext != nil && serverCtx.PipelineContext.TSLs != nil {
-			tslCount = serverCtx.PipelineContext.TSLs.Size()
-			for _, tsl := range serverCtx.PipelineContext.TSLs.ToSlice() {
-				if tsl != nil {
-					summaries = append(summaries, tsl.Summary())
-				}
+		if serverCtx.RegistryManager != nil {
+			for _, info := range serverCtx.RegistryManager.ListRegistries() {
+				registryInfos = append(registryInfos, map[string]interface{}{
+					"name":            info.Name,
+					"type":            info.Type,
+					"description":     info.Description,
+					"trust_anchors":   info.TrustAnchors,
+					"resource_types":  info.ResourceTypes,
+					"resolution_only": info.ResolutionOnly,
+					"healthy":         info.Healthy,
+				})
 			}
+			registryCount = len(registryInfos)
 		}
 
 		serverCtx.Logger.Info("API /tsls request",
 			logging.F("remote_ip", c.ClientIP()),
-			logging.F("tsl_count", tslCount))
+			logging.F("registry_count", registryCount))
 
 		c.JSON(200, gin.H{
-			"count":        tslCount,
+			"count":        registryCount,
 			"last_updated": lastUpdated,
-			"tsls":         summaries,
+			"registries":   registryInfos,
 		})
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/sirosfoundation/go-trust/pkg/logging"
+	"github.com/sirosfoundation/g119612/pkg/logging"
 )
 
 // HealthResponse represents the response from health check endpoints
@@ -39,7 +39,7 @@ type ReadinessResponse struct {
 //
 // The /readyz endpoint checks whether the service has:
 //   - Successfully loaded at least one TSL
-//   - Processed the pipeline at least once
+//   - Refreshed registries at least once
 //
 // If these conditions are not met, it returns 503 Service Unavailable.
 //
@@ -74,7 +74,7 @@ func HealthHandler(serverCtx *ServerContext) gin.HandlerFunc {
 
 // ReadinessHandler godoc
 // @Summary Readiness check
-// @Description Returns ready status if pipeline has been processed and TSLs are loaded
+// @Description Returns ready status if registries have been refreshed and are loaded
 // @Description
 // @Description Query Parameters:
 // @Description - verbose=true: Include detailed TSL information in the response
@@ -87,41 +87,44 @@ func HealthHandler(serverCtx *ServerContext) gin.HandlerFunc {
 func ReadinessHandler(serverCtx *ServerContext) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		serverCtx.RLock()
-		tslCount := 0
+		registryCount := 0
 		lastProcessed := ""
-		pipelineProcessed := !serverCtx.LastProcessed.IsZero()
+		hasProcessed := !serverCtx.LastProcessed.IsZero()
 		verbose := c.Query("verbose") == "true"
 
-		if serverCtx.PipelineContext != nil && serverCtx.PipelineContext.TSLs != nil {
-			tslCount = serverCtx.PipelineContext.TSLs.Size()
+		if serverCtx.RegistryManager != nil {
+			registryCount = len(serverCtx.RegistryManager.ListRegistries())
 		}
 
-		if pipelineProcessed {
+		if hasProcessed {
 			lastProcessed = serverCtx.LastProcessed.Format(time.RFC3339)
 		}
 
-		// Collect detailed TSL summaries if verbose mode requested
-		var tslSummaries []map[string]interface{}
-		if verbose && serverCtx.PipelineContext != nil && serverCtx.PipelineContext.TSLs != nil {
-			for _, tsl := range serverCtx.PipelineContext.TSLs.ToSlice() {
-				if tsl != nil {
-					tslSummaries = append(tslSummaries, tsl.Summary())
-				}
+		// Collect detailed registry information if verbose mode requested
+		var registryInfos []map[string]interface{}
+		if verbose && serverCtx.RegistryManager != nil {
+			for _, info := range serverCtx.RegistryManager.ListRegistries() {
+				registryInfos = append(registryInfos, map[string]interface{}{
+					"name":            info.Name,
+					"resource_types":  info.ResourceTypes,
+					"resolution_only": info.ResolutionOnly,
+					"healthy":         info.Healthy,
+				})
 			}
 		}
 		serverCtx.RUnlock()
 
 		// Service is ready if:
-		// 1. Pipeline has been processed at least once
-		// 2. At least one TSL is loaded (optional but recommended)
-		isReady := pipelineProcessed && tslCount > 0
+		// 1. Registries have been refreshed at least once
+		// 2. At least one registry is available (optional but recommended)
+		isReady := hasProcessed && registryCount > 0
 
 		response := ReadinessResponse{
 			Timestamp:     time.Now(),
-			TSLCount:      tslCount,
+			TSLCount:      registryCount, // Using TSLCount field for backward compat
 			LastProcessed: lastProcessed,
 			Ready:         isReady,
-			TSLs:          tslSummaries, // Only populated if verbose=true
+			TSLs:          registryInfos, // Using TSLs field for backward compat
 		}
 
 		if isReady {
@@ -132,16 +135,16 @@ func ReadinessHandler(serverCtx *ServerContext) gin.HandlerFunc {
 				logging.F("remote_ip", c.ClientIP()),
 				logging.F("endpoint", c.Request.URL.Path),
 				logging.F("verbose", verbose),
-				logging.F("tsl_count", tslCount),
+				logging.F("registry_count", registryCount),
 				logging.F("last_processed", lastProcessed))
 
 			c.JSON(200, response)
 		} else {
 			response.Status = "not_ready"
-			if !pipelineProcessed {
-				response.Message = "Pipeline has not been processed yet"
-			} else if tslCount == 0 {
-				response.Message = "No TSLs loaded yet"
+			if !hasProcessed {
+				response.Message = "Registries have not been refreshed yet"
+			} else if registryCount == 0 {
+				response.Message = "No registries configured"
 			}
 
 			serverCtx.Logger.Warn("Readiness check failed",
@@ -149,8 +152,8 @@ func ReadinessHandler(serverCtx *ServerContext) gin.HandlerFunc {
 				logging.F("endpoint", c.Request.URL.Path),
 				logging.F("verbose", verbose),
 				logging.F("reason", response.Message),
-				logging.F("tsl_count", tslCount),
-				logging.F("pipeline_processed", pipelineProcessed))
+				logging.F("registry_count", registryCount),
+				logging.F("has_processed", hasProcessed))
 
 			c.JSON(503, response)
 		}

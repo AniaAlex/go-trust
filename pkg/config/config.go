@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sirosfoundation/go-trust/pkg/validation"
+	"github.com/sirosfoundation/g119612/pkg/validation"
 	"gopkg.in/yaml.v3"
 )
 

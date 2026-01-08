@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,28 +9,62 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/sirosfoundation/g119612/pkg/etsi119612"
-	"github.com/sirosfoundation/go-trust/pkg/logging"
-	"github.com/sirosfoundation/go-trust/pkg/pipeline"
-	"github.com/sirosfoundation/go-trust/pkg/utils"
+	"github.com/sirosfoundation/g119612/pkg/logging"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// createTestContext creates a ServerContext with the specified number of TSLs and last processed time
-func createTestContext(tslCount int, lastProcessed time.Time) *ServerContext {
-	pCtx := pipeline.NewContext()
-	pCtx.TSLs = utils.NewStack[*etsi119612.TSL]()
+// mockRegistry is a mock TrustRegistry for testing
+type mockRegistry struct {
+	name          string
+	healthy       bool
+	resourceTypes []string
+}
 
-	// Add dummy TSLs
-	for i := 0; i < tslCount; i++ {
-		pCtx.TSLs.Push(&etsi119612.TSL{})
+func (m *mockRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
+	return &authzen.EvaluationResponse{Decision: true}, nil
+}
+
+func (m *mockRegistry) Refresh(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockRegistry) SupportedResourceTypes() []string {
+	return m.resourceTypes
+}
+
+func (m *mockRegistry) SupportsResolutionOnly() bool {
+	return false
+}
+
+func (m *mockRegistry) Info() registry.RegistryInfo {
+	return registry.RegistryInfo{Name: m.name}
+}
+
+func (m *mockRegistry) Healthy() bool {
+	return m.healthy
+}
+
+// createTestContext creates a ServerContext with the specified number of registries and last processed time
+func createTestContext(registryCount int, lastProcessed time.Time) *ServerContext {
+	logger := logging.DefaultLogger()
+	mgr := registry.NewRegistryManager(registry.FirstMatch, 10*time.Second)
+
+	// Add mock registries
+	for i := 0; i < registryCount; i++ {
+		mgr.Register(&mockRegistry{
+			name:          "mock-registry",
+			healthy:       true,
+			resourceTypes: []string{"x5c", "jwk"},
+		})
 	}
 
 	return &ServerContext{
-		PipelineContext: pCtx,
+		RegistryManager: mgr,
 		LastProcessed:   lastProcessed,
-		Logger:          logging.DefaultLogger(),
+		Logger:          logger,
 	}
 }
 
@@ -113,7 +148,7 @@ func TestReadyEndpoint_NotReady_NoTSLs(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "Ready endpoint should return 503 when no TSLs loaded")
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "Ready endpoint should return 503 when no registries configured")
 
 	var response ReadinessResponse
 	err := json.Unmarshal(w.Body.Bytes(), &response)
@@ -123,7 +158,7 @@ func TestReadyEndpoint_NotReady_NoTSLs(t *testing.T) {
 	assert.False(t, response.Ready, "Service should not be ready")
 	assert.Equal(t, 0, response.TSLCount)
 	assert.NotEmpty(t, response.Message, "Should have message explaining why not ready")
-	assert.Contains(t, response.Message, "Pipeline has not been processed yet", "Message should mention pipeline not processed")
+	assert.Contains(t, response.Message, "Registries have not been refreshed yet", "Message should mention registries not refreshed")
 }
 
 func TestReadyEndpoint_NotReady_NotProcessed(t *testing.T) {
@@ -138,7 +173,7 @@ func TestReadyEndpoint_NotReady_NotProcessed(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "Ready endpoint should return 503 when pipeline not processed")
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "Ready endpoint should return 503 when registries not refreshed")
 
 	var response ReadinessResponse
 	err := json.Unmarshal(w.Body.Bytes(), &response)
@@ -148,7 +183,7 @@ func TestReadyEndpoint_NotReady_NotProcessed(t *testing.T) {
 	assert.False(t, response.Ready, "Service should not be ready")
 	assert.Equal(t, 5, response.TSLCount)
 	assert.NotEmpty(t, response.Message, "Should have message explaining why not ready")
-	assert.Contains(t, response.Message, "Pipeline has not been processed yet", "Message should mention pipeline not processed")
+	assert.Contains(t, response.Message, "Registries have not been refreshed yet", "Message should mention registries not refreshed")
 }
 
 func TestReadinessEndpoint(t *testing.T) {
@@ -296,7 +331,7 @@ func TestReadyzEndpoint_Verbose(t *testing.T) {
 	assert.True(t, response.Ready)
 	assert.Equal(t, 3, response.TSLCount)
 	assert.NotNil(t, response.TSLs, "TSLs field should be populated in verbose mode")
-	assert.Len(t, response.TSLs, 3, "Should include 3 TSL summaries in verbose mode")
+	assert.Len(t, response.TSLs, 3, "Should include 3 registry infos in verbose mode")
 }
 
 func TestReadyzEndpoint_NonVerbose(t *testing.T) {

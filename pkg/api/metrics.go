@@ -157,6 +157,7 @@ func (m *Metrics) MetricsMiddleware() gin.HandlerFunc {
 }
 
 // RecordPipelineExecution records metrics for a pipeline execution
+// DEPRECATED: Use RecordRefreshExecution instead
 func (m *Metrics) RecordPipelineExecution(duration time.Duration, tslCount int, err error) {
 	m.PipelineExecutionDuration.Observe(duration.Seconds())
 	m.PipelineExecutionTotal.Inc()
@@ -165,6 +166,18 @@ func (m *Metrics) RecordPipelineExecution(duration time.Duration, tslCount int, 
 	if err != nil {
 		m.PipelineExecutionErrors.Inc()
 		m.ErrorsTotal.WithLabelValues("pipeline_execution", "pipeline").Inc()
+	}
+}
+
+// RecordRefreshExecution records metrics for a registry refresh execution
+func (m *Metrics) RecordRefreshExecution(duration time.Duration, registryCount int, err error) {
+	m.PipelineExecutionDuration.Observe(duration.Seconds())
+	m.PipelineExecutionTotal.Inc()
+	m.TSLCount.Set(float64(registryCount))
+
+	if err != nil {
+		m.PipelineExecutionErrors.Inc()
+		m.ErrorsTotal.WithLabelValues("refresh_execution", "registry").Inc()
 	}
 }
 

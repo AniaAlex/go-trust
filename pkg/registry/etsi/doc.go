@@ -1,13 +1,12 @@
 // Package etsi provides TrustRegistry implementations for ETSI TS 119 612 Trust Status Lists.
 //
-// This package provides two registry implementations for validating X.509 certificates
-// against ETSI Trust Status Lists:
+// This package provides a registry implementation for validating X.509 certificates
+// against ETSI Trust Status Lists.
 //
-// # TSLRegistry (Standalone Mode)
+// # TSLRegistry
 //
 // TSLRegistry loads trust data directly from files or URLs without any pipeline dependency.
-// Use this for standalone applications, CLI tools, or when you don't need automatic
-// background updates.
+// Use this for standalone applications, CLI tools, or server mode with the RegistryManager.
 //
 // Data sources supported:
 //   - PEM certificate bundles (recommended for production)
@@ -37,28 +36,31 @@
 //	    MaxRefDepth:        3,
 //	})
 //
-// # PipelineBackedRegistry (Server Mode)
+// # Server Mode with RegistryManager
 //
-// PipelineBackedRegistry reads trust data from a PipelineContextProvider interface,
-// which is implemented by pipeline.Context. Use this when running the go-trust server
-// with background TSL updates managed by the pipeline system.
+// For server deployments, create a TSLRegistry and register it with the RegistryManager.
+// The server will call Refresh() periodically to keep trust data up to date.
 //
 // Example usage:
 //
-//	// Create server context with pipeline
-//	serverCtx := api.NewServerContext(nil)
-//	serverCtx.PipelineContext = &pipeline.Context{}
+//	// Create TSL registry that loads from a URL
+//	tslRegistry, err := etsi.NewTSLRegistry(etsi.TSLConfig{
+//	    Name:               "EU-TSL",
+//	    TSLURLs:            []string{"https://ec.europa.eu/tools/lotl/eu-lotl.xml"},
+//	    AllowNetworkAccess: true,
+//	    FollowRefs:         true,
+//	})
 //
-//	// Pipeline context implements PipelineContextProvider
-//	tslRegistry := etsi.NewPipelineBackedRegistry(serverCtx.PipelineContext, "ETSI-TSL")
+//	// Register with manager
+//	registryMgr := registry.NewRegistryManager(logger, strategy)
 //	registryMgr.Register(tslRegistry)
 //
-//	// Background pipeline keeps the context updated
-//	api.StartBackgroundUpdater(pl, serverCtx, 5*time.Minute)
+//	// Background refresher keeps registries updated
+//	api.StartBackgroundRefresher(serverCtx, 5*time.Minute)
 //
 // # AuthZEN Integration
 //
-// Both registry implementations support the same resource types:
+// The registry supports the following resource types:
 //   - "x5c": Base64-encoded X.509 certificate chain
 //   - "jwk": JSON Web Key with x5c claim
 //

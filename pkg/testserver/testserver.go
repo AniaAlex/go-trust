@@ -52,9 +52,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/sirosfoundation/g119612/pkg/logging"
 	"github.com/sirosfoundation/go-trust/pkg/api"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
-	"github.com/sirosfoundation/go-trust/pkg/logging"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 

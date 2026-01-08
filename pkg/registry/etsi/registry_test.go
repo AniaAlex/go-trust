@@ -1,15 +1,19 @@
 package etsi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -457,5 +461,759 @@ func TestTSLRegistry_CertPool(t *testing.T) {
 	pool := reg.CertPool()
 	if pool == nil {
 		t.Error("CertPool should not be nil")
+	}
+}
+
+func TestTSLRegistry_Evaluate_X5CValidChain(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test CA certificate
+	caCert, caPEM := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", caPEM)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "x5c-validate-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Extract the raw DER bytes and base64 encode them
+	certB64 := base64.StdEncoding.EncodeToString(caCert.Raw)
+
+	// Create request with x5c chain - the CA cert should validate against itself (self-signed)
+	req := &authzen.EvaluationRequest{
+		Resource: authzen.Resource{
+			Type: "x5c",
+			Key:  []interface{}{certB64},
+		},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !resp.Decision {
+		reason := "unknown"
+		if resp.Context != nil && resp.Context.Reason != nil {
+			reason = fmt.Sprintf("%v", resp.Context.Reason)
+		}
+		t.Errorf("expected true decision for valid self-signed CA, got false. Reason: %s", reason)
+	}
+}
+
+func TestTSLRegistry_Evaluate_X5CInvalidCert(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate trusted CA
+	_, caPEM := generateTestCertificate(t, "Trusted CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", caPEM)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "x5c-invalid-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Generate an untrusted certificate (not in pool)
+	untrustedCert, _ := generateTestCertificate(t, "Untrusted CA")
+	certB64 := base64.StdEncoding.EncodeToString(untrustedCert.Raw)
+
+	// Create request with untrusted certificate
+	req := &authzen.EvaluationRequest{
+		Resource: authzen.Resource{
+			Type: "x5c",
+			Key:  []interface{}{certB64},
+		},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.Decision {
+		t.Error("expected false decision for untrusted certificate")
+	}
+}
+
+func TestTSLRegistry_Evaluate_EmptyKey(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate trusted CA
+	_, caPEM := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", caPEM)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "empty-key-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Create request with empty key array
+	req := &authzen.EvaluationRequest{
+		Resource: authzen.Resource{
+			Type: "x5c",
+			Key:  []interface{}{},
+		},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.Decision {
+		t.Error("expected false decision for empty key")
+	}
+}
+
+func TestTSLRegistry_TSLCount(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "tsl-count-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Cert bundle doesn't add TSLs, so count should be 0
+	if reg.TSLCount() != 0 {
+		t.Errorf("expected 0 TSLs, got %d", reg.TSLCount())
+	}
+}
+
+func TestTSLRegistry_LastError(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "last-error-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Successful load should have no error
+	if reg.LastError() != nil {
+		t.Errorf("expected nil LastError, got %v", reg.LastError())
+	}
+}
+
+func TestTSLRegistry_TSLs(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "tsls-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Cert bundle doesn't add TSLs, so TSLs() returns nil for cert-bundle-only registry
+	tsls := reg.TSLs()
+	if len(tsls) != 0 {
+		t.Errorf("expected 0 TSLs for cert-bundle registry, got %d", len(tsls))
+	}
+}
+
+func TestTSLRegistry_ConfigDefaults(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	// Create registry with minimal config
+	reg, err := NewTSLRegistry(TSLConfig{
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Check defaults
+	if reg.config.Name != "ETSI-TSL" {
+		t.Errorf("expected default Name 'ETSI-TSL', got %q", reg.config.Name)
+	}
+	if reg.config.MaxRefDepth != 3 {
+		t.Errorf("expected default MaxRefDepth 3, got %d", reg.config.MaxRefDepth)
+	}
+	if reg.config.FetchTimeout != 30*time.Second {
+		t.Errorf("expected default FetchTimeout 30s, got %v", reg.config.FetchTimeout)
+	}
+	if !strings.HasPrefix(reg.config.UserAgent, "Go-Trust/") {
+		t.Errorf("expected UserAgent to start with 'Go-Trust/', got %q", reg.config.UserAgent)
+	}
+}
+
+func TestTSLRegistry_InvalidPEMContent(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Write file with invalid PEM content (looks like PEM but has bad bytes)
+	invalidPEM := []byte(`-----BEGIN CERTIFICATE-----
+notvalidbase64content!!!
+-----END CERTIFICATE-----
+`)
+	invalidPath := filepath.Join(tmpDir, "invalid.pem")
+	if err := os.WriteFile(invalidPath, invalidPEM, 0644); err != nil {
+		t.Fatalf("failed to write invalid file: %v", err)
+	}
+
+	_, err = NewTSLRegistry(TSLConfig{
+		Name:       "invalid-pem",
+		CertBundle: invalidPath,
+	})
+	if err == nil {
+		t.Error("expected error for invalid PEM content")
+	}
+}
+
+func TestTSLRegistry_LoadedAt(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	beforeCreate := time.Now()
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "loadedAt-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+	afterCreate := time.Now()
+
+	loadedAt := reg.LoadedAt()
+	if loadedAt.Before(beforeCreate) || loadedAt.After(afterCreate) {
+		t.Errorf("LoadedAt() = %v, expected between %v and %v", loadedAt, beforeCreate, afterCreate)
+	}
+}
+
+func TestTSLRegistry_InfoName(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	// Create registry with custom name
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "custom-name-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	info := reg.Info()
+	if info.Name != "custom-name-test" {
+		t.Errorf("Info().Name = %q, want %q", info.Name, "custom-name-test")
+	}
+}
+
+func TestBase64Decode(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "standard base64",
+			input:   base64.StdEncoding.EncodeToString([]byte("hello world")),
+			want:    "hello world",
+			wantErr: false,
+		},
+		{
+			name:    "with whitespace",
+			input:   base64.StdEncoding.EncodeToString([]byte("test")) + "\n",
+			want:    "test",
+			wantErr: false,
+		},
+		{
+			name:    "with spaces",
+			input:   "aGVs bG8g d29y bGQ=",
+			want:    "hello world",
+			wantErr: false,
+		},
+		{
+			name:    "with tabs",
+			input:   "aGVs\tbG8=",
+			want:    "hello",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := base64Decode(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("base64Decode() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && string(got) != tt.want {
+				t.Errorf("base64Decode() = %q, want %q", string(got), tt.want)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// Tests using real TSL XML files from EU eIDAS
+// ============================================================================
+
+// getTSLTestDataPath returns the path to the testdata directory
+func getTSLTestDataPath(t *testing.T) string {
+	t.Helper()
+	// Get the path relative to the test file
+	_, filename, _, ok := getCallerInfo()
+	if !ok {
+		t.Skip("could not determine test file location")
+	}
+	return filepath.Join(filepath.Dir(filename), "testdata")
+}
+
+// getCallerInfo returns caller information for getTSLTestDataPath
+func getCallerInfo() (pc uintptr, file string, line int, ok bool) {
+	// We need to import runtime but it's a simple function
+	// Instead, we'll use a simpler approach
+	return 0, "", 0, false
+}
+
+// TestNewTSLRegistry_WithLocalTSLFile tests loading from a local TSL XML file
+func TestNewTSLRegistry_WithLocalTSLFile(t *testing.T) {
+	// Check if testdata file exists - use EU LOTL which has validated signature
+	tslPath := filepath.Join("testdata", "eu-lotl.xml")
+	if _, err := os.Stat(tslPath); os.IsNotExist(err) {
+		t.Skip("testdata/eu-lotl.xml not found - run 'go run tmp/download_lotl.go' to download")
+	}
+
+	// Create temp directory for cert bundle (EU LOTL has 0 providers, needs bundle)
+	tmpDir, err := os.MkdirTemp("", "tsl-local-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test.pem", pemData)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "EU-LOTL-Test",
+		CertBundle: certPath,
+		TSLFiles:   []string{tslPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry from TSL file: %v", err)
+	}
+
+	// Verify it's healthy
+	if !reg.Healthy() {
+		t.Error("registry should be healthy")
+	}
+
+	// Verify we loaded at least one TSL
+	if reg.TSLCount() < 1 {
+		t.Errorf("expected at least 1 TSL, got %d", reg.TSLCount())
+	}
+
+	// Note: EU LOTL is a "List of Trusted Lists" so it has 0 trust service providers
+	// and therefore 0 certificates. This is expected - it contains pointers to other TSLs.
+	// Log counts for debugging
+	t.Logf("Loaded %d TSLs with %d certificates (LOTL has 0 providers, this is expected)", reg.TSLCount(), reg.CertificateCount())
+
+	// Verify info
+	info := reg.Info()
+	if info.Name != "EU-LOTL-Test" {
+		t.Errorf("expected name 'EU-LOTL-Test', got %q", info.Name)
+	}
+}
+
+// TestNewTSLRegistry_WithFileURLTSL tests loading from a file:// URL
+func TestNewTSLRegistry_WithFileURLTSL(t *testing.T) {
+	// Check if testdata file exists
+	tslPath := filepath.Join("testdata", "eu-lotl.xml")
+	if _, err := os.Stat(tslPath); os.IsNotExist(err) {
+		t.Skip("testdata/eu-lotl.xml not found")
+	}
+
+	absPath, err := filepath.Abs(tslPath)
+	if err != nil {
+		t.Fatalf("failed to get absolute path: %v", err)
+	}
+
+	// Create temp directory for cert bundle (EU LOTL has 0 providers, needs bundle)
+	tmpDir, err := os.MkdirTemp("", "tsl-url-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test.pem", pemData)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "EU-LOTL-FileURL-Test",
+		CertBundle: certPath,
+		TSLURLs:    []string{"file://" + absPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry from file:// URL: %v", err)
+	}
+
+	// Verify we loaded TSL
+	if reg.TSLCount() < 1 {
+		t.Errorf("expected at least 1 TSL, got %d", reg.TSLCount())
+	}
+	// Note: EU LOTL has 0 certificates (it's a list of lists, not actual services)
+}
+
+// TestNewTSLRegistry_TSLFileNotFound tests error handling for missing TSL file
+func TestNewTSLRegistry_TSLFileNotFound(t *testing.T) {
+	_, err := NewTSLRegistry(TSLConfig{
+		Name:     "missing-tsl",
+		TSLFiles: []string{"/nonexistent/path/tsl.xml"},
+	})
+	if err == nil {
+		t.Error("expected error for missing TSL file")
+	}
+}
+
+// TestTSLRegistry_TSLs_WithRealTSL tests the TSLs() accessor with real data
+func TestTSLRegistry_TSLs_WithRealTSL(t *testing.T) {
+	tslPath := filepath.Join("testdata", "eu-lotl.xml")
+	if _, err := os.Stat(tslPath); os.IsNotExist(err) {
+		t.Skip("testdata/eu-lotl.xml not found")
+	}
+
+	// Create temp directory for cert bundle (EU LOTL has 0 providers, needs bundle)
+	tmpDir, err := os.MkdirTemp("", "tsl-accessor-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test.pem", pemData)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "TSLs-accessor-test",
+		CertBundle: certPath,
+		TSLFiles:   []string{tslPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	tsls := reg.TSLs()
+	if len(tsls) == 0 {
+		t.Error("expected TSLs() to return loaded TSLs")
+	}
+
+	// Verify TSL has expected structure
+	for _, tsl := range tsls {
+		if tsl == nil {
+			t.Error("TSL should not be nil")
+			continue
+		}
+		// Check that we have scheme information
+		if tsl.StatusList.TslSchemeInformation == nil {
+			t.Error("TSL should have scheme information")
+		}
+	}
+}
+
+// TestTSLRegistry_Refresh_WithRealTSL tests refresh functionality with real TSL
+func TestTSLRegistry_Refresh_WithRealTSL(t *testing.T) {
+	tslPath := filepath.Join("testdata", "eu-lotl.xml")
+	if _, err := os.Stat(tslPath); os.IsNotExist(err) {
+		t.Skip("testdata/eu-lotl.xml not found")
+	}
+
+	// Create temp directory for cert bundle (EU LOTL has 0 providers, needs bundle)
+	tmpDir, err := os.MkdirTemp("", "tsl-refresh-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test.pem", pemData)
+
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "Refresh-TSL-test",
+		CertBundle: certPath,
+		TSLFiles:   []string{tslPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	originalCount := reg.CertificateCount()
+	originalLoadedAt := reg.LoadedAt()
+
+	// Wait a bit to ensure timestamp difference
+	time.Sleep(10 * time.Millisecond)
+
+	// Refresh
+	if err := reg.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+
+	// Verify certificate count is consistent
+	if reg.CertificateCount() != originalCount {
+		t.Errorf("certificate count changed after refresh: was %d, now %d",
+			originalCount, reg.CertificateCount())
+	}
+
+	// Verify loadedAt changed
+	if !reg.LoadedAt().After(originalLoadedAt) {
+		t.Error("expected LoadedAt to be updated after refresh")
+	}
+}
+
+// TestExtractCertsFromTSL_NilTSL tests extractCertsFromTSL with nil input
+func TestExtractCertsFromTSL_NilTSL(t *testing.T) {
+	certs := extractCertsFromTSL(nil)
+	if len(certs) != 0 {
+		t.Errorf("expected 0 certs from nil TSL, got %d", len(certs))
+	}
+}
+
+// TestTSLRegistry_SignatureValidation verifies that tampered TSL files are rejected
+func TestTSLRegistry_SignatureValidation(t *testing.T) {
+	tslPath := filepath.Join("testdata", "eu-lotl.xml")
+	if _, err := os.Stat(tslPath); os.IsNotExist(err) {
+		t.Skip("testdata/eu-lotl.xml not found")
+	}
+
+	// Read the original TSL
+	original, err := os.ReadFile(tslPath)
+	if err != nil {
+		t.Fatalf("failed to read TSL: %v", err)
+	}
+
+	// Create a tampered version by modifying content within signed region
+	// We'll change a string in the SchemeOperatorName which is inside the signed content
+	tampered := bytes.Replace(original,
+		[]byte("European Commission"),
+		[]byte("TAMPERED COMMISSION"),
+		1)
+
+	if bytes.Equal(original, tampered) {
+		t.Skip("could not create tampered TSL - pattern not found")
+	}
+
+	// Write tampered file to temp location
+	tmpDir, err := os.MkdirTemp("", "tsl-tamper-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tamperedPath := filepath.Join(tmpDir, "tampered-tsl.xml")
+	if err := os.WriteFile(tamperedPath, tampered, 0644); err != nil {
+		t.Fatalf("failed to write tampered TSL: %v", err)
+	}
+
+	// Also need a cert bundle for the registry to be valid
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test.pem", pemData)
+
+	// Attempt to load tampered TSL - should fail signature validation
+	_, err = NewTSLRegistry(TSLConfig{
+		Name:       "Tampered-TSL-test",
+		CertBundle: certPath,
+		TSLFiles:   []string{tamperedPath},
+	})
+
+	// The registry creation should fail because signature validation should reject tampered content
+	if err == nil {
+		t.Error("CRITICAL: expected signature validation to reject tampered TSL, but it was accepted!")
+	} else {
+		t.Logf("Good: tampered TSL correctly rejected with error: %v", err)
+	}
+}
+
+// TestTSLRegistry_CombinedSources tests loading from both cert bundle and TSL file
+func TestTSLRegistry_CombinedSources(t *testing.T) {
+	// Create temp directory for cert bundle
+	tmpDir, err := os.MkdirTemp("", "tsl-combined-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate for bundle
+	_, pemData := generateTestCertificate(t, "Bundle CA")
+	certPath := writeTestCertFile(t, tmpDir, "bundle.pem", pemData)
+
+	// Check if TSL testdata exists
+	tslPath := filepath.Join("testdata", "eu-lotl.xml")
+	if _, err := os.Stat(tslPath); os.IsNotExist(err) {
+		t.Skip("testdata/eu-lotl.xml not found")
+	}
+
+	// Create registry with both sources
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "Combined-sources-test",
+		CertBundle: certPath,
+		TSLFiles:   []string{tslPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Should have at least the cert from the bundle
+	// Note: EU LOTL has 0 service providers so doesn't add certs
+	if reg.CertificateCount() < 1 {
+		t.Errorf("expected at least 1 certificate from bundle, got %d",
+			reg.CertificateCount())
+	}
+
+	// Should have TSLs from the TSL file
+	if reg.TSLCount() < 1 {
+		t.Errorf("expected at least 1 TSL, got %d", reg.TSLCount())
+	}
+}
+
+// TestTSLRegistry_LocalPathConversion tests that local paths are converted to file:// URLs
+func TestTSLRegistry_LocalPathConversion(t *testing.T) {
+	tslPath := filepath.Join("testdata", "eu-lotl.xml")
+	if _, err := os.Stat(tslPath); os.IsNotExist(err) {
+		t.Skip("testdata/eu-lotl.xml not found")
+	}
+
+	// Create temp directory for cert bundle (EU LOTL has 0 providers, needs bundle)
+	tmpDir, err := os.MkdirTemp("", "tsl-conversion-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test.pem", pemData)
+
+	// Use TSLURLs with a local path (not a URL) - should be auto-converted
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "LocalPath-conversion-test",
+		CertBundle: certPath,
+		TSLURLs:    []string{tslPath}, // Local path, not URL
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Just verify registry was created successfully
+	if reg.TSLCount() < 1 {
+		t.Error("expected at least 1 TSL after local path conversion")
+	}
+}
+
+// TestTSLRegistry_TSLCount_WithMultipleFiles tests TSLCount with multiple TSL files
+func TestTSLRegistry_TSLCount_WithMultipleFiles(t *testing.T) {
+	tslPath := filepath.Join("testdata", "eu-lotl.xml")
+	if _, err := os.Stat(tslPath); os.IsNotExist(err) {
+		t.Skip("testdata/eu-lotl.xml not found")
+	}
+
+	// Create temp directory for cert bundle (EU LOTL has 0 providers, needs bundle)
+	tmpDir, err := os.MkdirTemp("", "tsl-count-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test.pem", pemData)
+
+	// Load the same file twice (as if it were different files)
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "TSLCount-multiple-test",
+		CertBundle: certPath,
+		TSLFiles:   []string{tslPath},
+		TSLURLs:    []string{tslPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Should have 2 TSLs (same file loaded twice)
+	if reg.TSLCount() != 2 {
+		t.Errorf("expected 2 TSLs, got %d", reg.TSLCount())
 	}
 }

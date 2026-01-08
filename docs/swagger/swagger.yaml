@@ -166,16 +166,20 @@ info:
     name: sirosfoundation
     url: https://github.com/sirosfoundation/go-trust
   description: |-
-    Trust decision engine for ETSI TS 119612 Trust Status Lists (TSLs)
+    Multi-framework trust decision engine providing AuthZEN-based trust evaluation
 
-    Go-Trust provides AuthZEN-based trust decisions for X.509 certificates using ETSI trust status lists.
-    It processes TSLs, validates certificates, and provides health/metrics endpoints for production deployment.
+    Go-Trust is a Policy Decision Point (PDP) that evaluates trust across multiple frameworks:
+    - ETSI TS 119612 Trust Status Lists (for X.509 certificates)
+    - OpenID Federation (for entity trust chains)
+    - DID Web (for decentralized identifiers)
+
+    The service provides health/metrics endpoints for production deployment.
   license:
     name: BSD-2-Clause
     url: https://opensource.org/licenses/BSD-2-Clause
   termsOfService: https://github.com/sirosfoundation/go-trust
   title: Go-Trust API
-  version: "1.0"
+  version: "2.0"
 paths:
   /.well-known/authzen-configuration:
     get:
@@ -352,7 +356,7 @@ tags:
 - description: Health check and readiness endpoints for Kubernetes and monitoring
     systems
   name: Health
-- description: Server status and TSL information endpoints
+- description: Server status and registry information endpoints
   name: Status
 - description: AuthZEN protocol endpoints for trust decision evaluation
   name: AuthZEN

@@ -7,15 +7,10 @@ replace github.com/moov-io/signedxml v1.2.3 => github.com/leifj/signedxml v1.2.3
 replace github.com/russellhaering/goxmldsig v1.5.0 => github.com/sirosfoundation/goxmldsig v1.5.0-leifj1
 
 require (
-	github.com/PuerkitoBio/goquery v1.11.0
-	github.com/ThalesGroup/crypto11 v1.6.0
-	github.com/beevik/etree v1.6.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-oidfed/lib v0.9.0
 	github.com/prometheus/client_golang v1.23.2
-	github.com/russellhaering/goxmldsig v1.5.0
-	github.com/sirosfoundation/g119612 v0.0.0-20251216105546-cea1e5c9b953
-	github.com/sirupsen/logrus v1.9.3
+	github.com/sirosfoundation/g119612 v0.0.0-20260108094825-5b3123230280
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
@@ -31,7 +26,7 @@ require (
 	github.com/TwiN/gocache/v2 v2.4.0 // indirect
 	github.com/adam-hanna/arrayOperations v1.0.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
-	github.com/andybalholm/cascadia v1.3.3 // indirect
+	github.com/beevik/etree v1.6.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.14.0 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
@@ -78,7 +73,6 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
-	github.com/miekg/pkcs11 v1.1.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/moov-io/signedxml v1.2.3 // indirect
@@ -93,9 +87,10 @@ require (
 	github.com/quic-go/quic-go v0.54.0 // indirect
 	github.com/redis/go-redis/v9 v9.17.2 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
+	github.com/russellhaering/goxmldsig v1.5.0 // indirect
 	github.com/scylladb/go-set v1.0.3-0.20200225121959-cc7b2070d91e // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
-	github.com/thales-e-security/pool v0.0.2 // indirect
+	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect

@@ -1,4 +1,14 @@
 // Package oidfed implements a TrustRegistry using OpenID Federation for trust chain validation.
+//
+// This package provides an implementation of the TrustRegistry interface for OpenID Federation.
+// It supports trust chain resolution, trust mark and entity type filtering, and metadata caching.
+//
+// Key features:
+//   - Configurable trust anchors (with optional explicit JWKS)
+//   - Required trust marks and entity type filters (default and per-request)
+//   - Metadata caching with configurable TTL and size
+//   - Trust chain inspection and certificate inclusion in responses
+//   - Integration with AuthZEN for policy-based trust evaluation
 package oidfed
 
 import (
@@ -18,6 +28,8 @@ import (
 )
 
 // CacheEntry represents a cached trust chain resolution result.
+// It stores the resolved trust chains, the entity ID, the time of resolution,
+// expiration, and the trust anchor used.
 type CacheEntry struct {
 	EntityID      string
 	Chains        []oidfed.TrustChain
@@ -27,6 +39,7 @@ type CacheEntry struct {
 }
 
 // MetadataCache provides caching for OpenID Federation metadata and trust chains.
+// It supports TTL-based expiration and a maximum size with simple eviction.
 type MetadataCache struct {
 	entries map[string]*CacheEntry
 	mu      sync.RWMutex
@@ -34,7 +47,8 @@ type MetadataCache struct {
 	maxSize int
 }
 
-// NewMetadataCache creates a new metadata cache.
+// NewMetadataCache creates a new MetadataCache for OpenID Federation metadata and trust chains.
+// If ttl or maxSize are zero, sensible defaults are used (5 minutes, 1000 entries).
 func NewMetadataCache(ttl time.Duration, maxSize int) *MetadataCache {
 	if ttl == 0 {
 		ttl = 5 * time.Minute // Default 5 minute TTL
@@ -49,7 +63,7 @@ func NewMetadataCache(ttl time.Duration, maxSize int) *MetadataCache {
 	}
 }
 
-// cacheKey generates a cache key from entity ID and constraints.
+// cacheKey generates a cache key from entity ID, trust marks, and entity types.
 func (c *MetadataCache) cacheKey(entityID string, trustMarks, entityTypes []string) string {
 	h := sha256.New()
 	h.Write([]byte(entityID))
@@ -62,7 +76,7 @@ func (c *MetadataCache) cacheKey(entityID string, trustMarks, entityTypes []stri
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
-// Get retrieves a cached entry if valid.
+// Get retrieves a cached entry for the given entity and constraints if it exists and is not expired.
 func (c *MetadataCache) Get(entityID string, trustMarks, entityTypes []string) *CacheEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -80,7 +94,7 @@ func (c *MetadataCache) Get(entityID string, trustMarks, entityTypes []string) *
 	return entry
 }
 
-// Set stores a cache entry.
+// Set stores a cache entry for the given entity and constraints, evicting oldest entries if needed.
 func (c *MetadataCache) Set(entityID string, trustMarks, entityTypes []string, chains []oidfed.TrustChain, trustAnchorID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -101,7 +115,7 @@ func (c *MetadataCache) Set(entityID string, trustMarks, entityTypes []string, c
 	}
 }
 
-// evictOldest removes the oldest 10% of entries.
+// evictOldest removes the oldest 10% of entries from the cache, or expired entries if present.
 func (c *MetadataCache) evictOldest() {
 	if len(c.entries) == 0 {
 		return
@@ -124,7 +138,7 @@ func (c *MetadataCache) evictOldest() {
 	}
 }
 
-// Invalidate removes a specific entry from the cache.
+// Invalidate removes a specific entry from the cache for the given entity and constraints.
 func (c *MetadataCache) Invalidate(entityID string, trustMarks, entityTypes []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -139,33 +153,48 @@ func (c *MetadataCache) Clear() {
 	c.entries = make(map[string]*CacheEntry)
 }
 
-// Stats returns cache statistics.
+// Stats returns cache statistics: current size, hits, and misses (hits/misses not yet tracked).
 func (c *MetadataCache) Stats() (size int, hits int, misses int) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.entries), 0, 0 // TODO: track hits/misses
 }
 
-// OIDFedRegistry implements a trust registry using OpenID Federation.
-// It resolves trust chains from entities to configured trust anchors and
-// evaluates them against AuthZEN access evaluation requests.
+// OIDFedRegistry implements a TrustRegistry using OpenID Federation.
 //
-// The registry supports:
-// - Configurable trust anchors with optional explicit JWKS
-// - Required trust marks (configured and/or per-request via context)
-// - Entity type filtering (configured and/or per-request via context)
-// - Metadata caching with configurable TTL
-// - Trust chain inspection in responses
+// It resolves trust chains from entities to configured trust anchors and
+// evaluates them against AuthZEN access evaluation requests. The registry supports:
+//   - Configurable trust anchors with optional explicit JWKS
+//   - Required trust marks (configured and/or per-request via context)
+//   - Entity type filtering (configured and/or per-request via context)
+//   - Metadata caching with configurable TTL and size
+//   - Trust chain and certificate inspection in responses
+//   - Resolution-only mode for metadata retrieval
 type OIDFedRegistry struct {
-	trustAnchors       oidfed.TrustAnchors
-	requiredTrustMarks []string // Default required trust marks
-	entityTypes        []string // Default entity type filter
-	description        string
-	cache              *MetadataCache
-	maxChainDepth      int
+	// trustAnchors is the set of configured OpenID Federation trust anchors.
+	trustAnchors oidfed.TrustAnchors
+	// requiredTrustMarks is the default set of required trust marks (can be overridden per request).
+	requiredTrustMarks []string
+	// entityTypes is the default set of allowed entity types (can be overridden per request).
+	entityTypes []string
+	// description is a human-readable description of this registry instance.
+	description string
+	// cache is the metadata and trust chain cache (may be nil for no caching).
+	cache *MetadataCache
+	// maxChainDepth is the maximum trust chain resolution depth.
+	maxChainDepth int
 }
 
 // Config holds configuration for creating an OIDFedRegistry.
+//
+// Fields:
+//   - TrustAnchors: List of trust anchor configs (entity ID and optional JWKS)
+//   - RequiredTrustMarks: Default required trust marks (can be overridden per request)
+//   - EntityTypes: Default entity types to filter (can be overridden per request)
+//   - Description: Human-readable description
+//   - CacheTTL: Duration to cache resolved trust chains (default: 5 minutes)
+//   - MaxCacheSize: Maximum number of cache entries (default: 1000)
+//   - MaxChainDepth: Maximum trust chain resolution depth (default: 10)
 type Config struct {
 	// TrustAnchors defines the federation trust anchors
 	TrustAnchors []TrustAnchorConfig `json:"trust_anchors"`
@@ -191,7 +220,7 @@ type Config struct {
 	MaxChainDepth int `json:"max_chain_depth,omitempty"`
 }
 
-// TrustAnchorConfig defines a single trust anchor.
+// TrustAnchorConfig defines a single trust anchor for OpenID Federation.
 type TrustAnchorConfig struct {
 	// EntityID is the entity identifier (URL) of the trust anchor
 	EntityID string `json:"entity_id"`
@@ -201,7 +230,8 @@ type TrustAnchorConfig struct {
 	JWKS *oidfedjwx.JWKS `json:"jwks,omitempty"`
 }
 
-// NewOIDFedRegistry creates a new OpenID Federation trust registry.
+// NewOIDFedRegistry creates a new OIDFedRegistry for OpenID Federation trust chain validation.
+// Returns an error if no trust anchors are configured or if any trust anchor is missing an entity ID.
 func NewOIDFedRegistry(config Config) (*OIDFedRegistry, error) {
 	if len(config.TrustAnchors) == 0 {
 		return nil, fmt.Errorf("at least one trust anchor must be configured")
@@ -247,7 +277,7 @@ func (r *OIDFedRegistry) Name() string {
 	return "oidfed-registry"
 }
 
-// Description returns a human-readable description.
+// Description returns a human-readable description of the registry instance.
 func (r *OIDFedRegistry) Description() string {
 	return r.description
 }
@@ -480,7 +510,7 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 	}, nil
 }
 
-// Info returns registry information.
+// Info returns metadata about this registry instance, including trust anchors.
 func (r *OIDFedRegistry) Info() registry.RegistryInfo {
 	return registry.RegistryInfo{
 		Name:         r.Name(),
@@ -490,15 +520,15 @@ func (r *OIDFedRegistry) Info() registry.RegistryInfo {
 	}
 }
 
-// Healthy returns true if the registry is operational.
+// Healthy returns true if the registry is operational (i.e., has at least one trust anchor).
 func (r *OIDFedRegistry) Healthy() bool {
 	// OpenID Federation registry is healthy as long as it's configured
 	return len(r.trustAnchors) > 0
 }
 
 // Refresh triggers an update of cached data.
-// For OpenID Federation, this clears our local metadata cache and lets
-// the go-oidfed/lib handle re-resolution on next request.
+// For OpenID Federation, this clears the local metadata cache and lets
+// the go-oidfed/lib handle re-resolution on the next request.
 func (r *OIDFedRegistry) Refresh(ctx context.Context) error {
 	// Clear local metadata cache
 	if r.cache != nil {

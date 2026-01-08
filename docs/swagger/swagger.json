@@ -5,7 +5,7 @@
     ],
     "swagger": "2.0",
     "info": {
-        "description": "Trust decision engine for ETSI TS 119612 Trust Status Lists (TSLs)\n\nGo-Trust provides AuthZEN-based trust decisions for X.509 certificates using ETSI trust status lists.\nIt processes TSLs, validates certificates, and provides health/metrics endpoints for production deployment.",
+        "description": "Multi-framework trust decision engine providing AuthZEN-based trust evaluation\n\nGo-Trust is a Policy Decision Point (PDP) that evaluates trust across multiple frameworks:\n- ETSI TS 119612 Trust Status Lists (for X.509 certificates)\n- OpenID Federation (for entity trust chains)\n- DID Web (for decentralized identifiers)\n\nThe service provides health/metrics endpoints for production deployment.",
         "title": "Go-Trust API",
         "termsOfService": "https://github.com/sirosfoundation/go-trust",
         "contact": {
@@ -17,7 +17,7 @@
             "name": "BSD-2-Clause",
             "url": "https://opensource.org/licenses/BSD-2-Clause"
         },
-        "version": "1.0"
+        "version": "2.0"
     },
     "host": "localhost:6001",
     "basePath": "/",
@@ -427,7 +427,7 @@
             "name": "Health"
         },
         {
-            "description": "Server status and TSL information endpoints",
+            "description": "Server status and registry information endpoints",
             "name": "Status"
         },
         {

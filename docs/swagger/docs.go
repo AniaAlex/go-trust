@@ -429,7 +429,7 @@ const docTemplate = `{
             "name": "Health"
         },
         {
-            "description": "Server status and TSL information endpoints",
+            "description": "Server status and registry information endpoints",
             "name": "Status"
         },
         {
@@ -441,12 +441,12 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0",
+	Version:          "2.0",
 	Host:             "localhost:6001",
 	BasePath:         "/",
 	Schemes:          []string{"http", "https"},
 	Title:            "Go-Trust API",
-	Description:      "Trust decision engine for ETSI TS 119612 Trust Status Lists (TSLs)\n\nGo-Trust provides AuthZEN-based trust decisions for X.509 certificates using ETSI trust status lists.\nIt processes TSLs, validates certificates, and provides health/metrics endpoints for production deployment.",
+	Description:      "Multi-framework trust decision engine providing AuthZEN-based trust evaluation\n\nGo-Trust is a Policy Decision Point (PDP) that evaluates trust across multiple frameworks:\n- ETSI TS 119612 Trust Status Lists (for X.509 certificates)\n- OpenID Federation (for entity trust chains)\n- DID Web (for decentralized identifiers)\n\nThe service provides health/metrics endpoints for production deployment.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

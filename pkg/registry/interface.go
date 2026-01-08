@@ -72,11 +72,14 @@ type TrustRegistry interface {
 
 // RegistryInfo provides metadata about a TrustRegistry instance
 type RegistryInfo struct {
-	Name         string   // Human-readable name, e.g. "ETSI TSL Registry"
-	Type         string   // Registry type identifier, e.g. "etsi_tsl", "openid_federation"
-	Description  string   // Description of what this registry provides
-	Version      string   // Implementation version
-	TrustAnchors []string // List of trust anchor identifiers (TSL URLs, federation roots, etc.)
+	Name           string   // Human-readable name, e.g. "ETSI TSL Registry"
+	Type           string   // Registry type identifier, e.g. "etsi_tsl", "openid_federation"
+	Description    string   // Description of what this registry provides
+	Version        string   // Implementation version
+	TrustAnchors   []string // List of trust anchor identifiers (TSL URLs, federation roots, etc.)
+	ResourceTypes  []string // Supported resource types (from SupportedResourceTypes())
+	ResolutionOnly bool     // Whether this is a resolution-only registry (from SupportsResolutionOnly())
+	Healthy        bool     // Whether the registry is healthy (from Healthy())
 }
 
 // ResolutionStrategy defines how RegistryManager aggregates results from multiple registries

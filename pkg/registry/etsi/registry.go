@@ -43,9 +43,9 @@ import (
 	"time"
 
 	"github.com/sirosfoundation/g119612/pkg/etsi119612"
+	"github.com/sirosfoundation/g119612/pkg/utils/x509util"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
-	"github.com/sirosfoundation/go-trust/pkg/utils/x509util"
 )
 
 // TSLConfig configures an ETSI TSL registry.

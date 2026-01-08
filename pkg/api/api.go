@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
@@ -8,9 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/sirosfoundation/g119612/pkg/logging"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
-	"github.com/sirosfoundation/go-trust/pkg/logging"
-	"github.com/sirosfoundation/go-trust/pkg/pipeline"
 )
 
 // parseX5C extracts and parses x5c certificates from a map[string]interface{}.
@@ -133,103 +133,97 @@ func buildResponse(decision bool, reason string) authzen.EvaluationResponse {
 	}
 }
 
-// StartBackgroundUpdater runs the pipeline at regular intervals and updates the server context.
-// This function starts a goroutine that processes the pipeline at the specified frequency
-// and updates the ServerContext with the new pipeline results. The updated context is then
-// used by API handlers to respond to requests with fresh data.
+// StartBackgroundRefresher starts a background goroutine that periodically refreshes
+// all registered trust registries. This keeps TSL data and other trust information
+// up-to-date without requiring a full pipeline.
 //
-// The pipeline is processed immediately upon calling this function, before starting the
-// background updates. This ensures TSLs are available as soon as the server starts.
+// The refresh is executed immediately upon calling this function, then repeated
+// at the specified frequency. This ensures registries have data as soon as the
+// server starts.
 //
 // Success and failure events are logged using the ServerContext's structured logger:
-// - On success: An info-level message with the update frequency
-// - On failure: An error-level message with the error details and frequency
+// - On success: An info-level message with the update frequency and registry stats
+// - On failure: An error-level message with the error details
 //
 // Parameters:
-//   - pl: The pipeline to process periodically
-//   - serverCtx: The server context to update with pipeline results (must have a valid logger)
-//   - freq: The frequency at which to process the pipeline (e.g., 5m for every 5 minutes)
+//   - serverCtx: The server context with RegistryManager to refresh (must have a valid logger)
+//   - freq: The frequency at which to refresh registries (e.g., 5m for every 5 minutes)
 //
-// This function is typically called at server startup to ensure TSLs are kept up-to-date.
-func StartBackgroundUpdater(pl *pipeline.Pipeline, serverCtx *ServerContext, freq time.Duration) error {
-	// Process pipeline immediately to ensure TSLs are loaded without waiting
+// Returns an error if the RegistryManager is not configured.
+func StartBackgroundRefresher(serverCtx *ServerContext, freq time.Duration) error {
+	if serverCtx.RegistryManager == nil {
+		return fmt.Errorf("RegistryManager not configured")
+	}
+
+	ctx := context.Background()
+
+	// Refresh immediately to ensure data is loaded
 	start := time.Now()
-	newCtx, err := pl.Process(pipeline.NewContext())
+	err := serverCtx.RegistryManager.Refresh(ctx)
 	duration := time.Since(start)
 
 	serverCtx.Lock()
-	if err == nil && newCtx != nil {
-		serverCtx.PipelineContext = newCtx
-		serverCtx.LastProcessed = time.Now()
-		tslCount := countTSLs(newCtx)
-		serverCtx.Logger.Info("Initial pipeline processing successful",
-			logging.F("tsl_count", tslCount))
+	serverCtx.LastProcessed = time.Now()
+	serverCtx.Unlock()
+
+	if err == nil {
+		registryCount := len(serverCtx.RegistryManager.ListRegistries())
+		serverCtx.Logger.Info("Initial registry refresh successful",
+			logging.F("registry_count", registryCount),
+			logging.F("duration_ms", duration.Milliseconds()))
 
 		// Record metrics if available
 		if serverCtx.Metrics != nil {
-			serverCtx.Metrics.RecordPipelineExecution(duration, tslCount, nil)
+			serverCtx.Metrics.RecordRefreshExecution(duration, registryCount, nil)
 		}
-	} else if err != nil {
-		serverCtx.Logger.Error("Initial pipeline processing failed",
+	} else {
+		serverCtx.Logger.Error("Initial registry refresh failed",
 			logging.F("error", err.Error()))
 
 		// Record error metrics if available
 		if serverCtx.Metrics != nil {
-			serverCtx.Metrics.RecordPipelineExecution(duration, 0, err)
+			serverCtx.Metrics.RecordRefreshExecution(duration, 0, err)
 		}
 	}
-	serverCtx.Unlock()
 
-	// Start background processing
+	// Start background refresh
 	go func() {
-		for {
-			time.Sleep(freq)
+		ticker := time.NewTicker(freq)
+		defer ticker.Stop()
 
+		for range ticker.C {
 			start := time.Now()
-			newCtx, err := pl.Process(pipeline.NewContext())
+			err := serverCtx.RegistryManager.Refresh(ctx)
 			duration := time.Since(start)
 
 			serverCtx.Lock()
-			if err == nil && newCtx != nil {
-				serverCtx.PipelineContext = newCtx
-				serverCtx.LastProcessed = time.Now()
-			}
+			serverCtx.LastProcessed = time.Now()
 			serverCtx.Unlock()
 
 			if err != nil {
-				// ServerContext always has a logger after our improvements
-				serverCtx.Logger.Error("Pipeline processing failed",
+				serverCtx.Logger.Error("Registry refresh failed",
 					logging.F("error", err.Error()),
 					logging.F("frequency", freq.String()))
 
 				// Record error metrics if available
 				if serverCtx.Metrics != nil {
-					serverCtx.Metrics.RecordPipelineExecution(duration, 0, err)
+					serverCtx.Metrics.RecordRefreshExecution(duration, 0, err)
 				}
 			} else {
-				// Log successful update
-				tslCount := countTSLs(newCtx)
-				serverCtx.Logger.Info("Pipeline processed successfully",
+				registryCount := len(serverCtx.RegistryManager.ListRegistries())
+				serverCtx.Logger.Info("Registry refresh successful",
 					logging.F("frequency", freq.String()),
-					logging.F("tsl_count", tslCount))
+					logging.F("registry_count", registryCount),
+					logging.F("duration_ms", duration.Milliseconds()))
 
 				// Record metrics if available
 				if serverCtx.Metrics != nil {
-					serverCtx.Metrics.RecordPipelineExecution(duration, tslCount, nil)
+					serverCtx.Metrics.RecordRefreshExecution(duration, registryCount, nil)
 				}
 			}
 		}
 	}()
 	return nil
-}
-
-// countTSLs counts the number of TSLs in the pipeline context.
-// This is a helper function to provide consistent TSL counting for logging.
-func countTSLs(ctx *pipeline.Context) int {
-	if ctx == nil || ctx.TSLs == nil {
-		return 0
-	}
-	return ctx.TSLs.Size()
 }
 
 // NewServerContext creates a new ServerContext with a configured logger.
