@@ -9,6 +9,7 @@ replace github.com/russellhaering/goxmldsig v1.5.0 => github.com/sirosfoundation
 require (
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-oidfed/lib v0.9.0
+	github.com/multiformats/go-multibase v0.2.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sirosfoundation/g119612 v0.0.0-20260108094825-5b3123230280
 	github.com/stretchr/testify v1.11.1
@@ -78,6 +79,9 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/moov-io/signedxml v1.2.3 // indirect
+	github.com/mr-tron/base58 v1.1.0 // indirect
+	github.com/multiformats/go-base32 v0.0.3 // indirect
+	github.com/multiformats/go-base36 v0.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
