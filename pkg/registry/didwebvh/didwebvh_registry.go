@@ -1,0 +1,1053 @@
+// Package didwebvh implements a TrustRegistry using the did:webvh method specification.
+//
+// The did:webvh method extends did:web with verifiable history, providing:
+// - Self-certifying identifiers (SCIDs) derived from the initial DID log entry
+// - A verifiable chain of DID document versions stored in a JSON Lines log file
+// - Cryptographic verification of each log entry via Data Integrity proofs
+//
+// The specification is available at: https://identity.foundation/didwebvh/v1.0/
+package didwebvh
+
+import (
+	"bufio"
+	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/multiformats/go-multibase"
+	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	"github.com/sirosfoundation/go-trust/pkg/registry"
+	"vc/pkg/vc20/crypto/jcs"
+)
+
+// DIDWebVHRegistry implements a trust registry using the did:webvh method.
+// It resolves DID documents via HTTPS and validates the verifiable history.
+type DIDWebVHRegistry struct {
+	httpClient  *http.Client
+	timeout     time.Duration
+	description string
+	allowHTTP   bool // For testing only
+}
+
+// Config holds configuration for creating a DIDWebVHRegistry.
+type Config struct {
+	// Timeout for HTTP requests (default: 30 seconds)
+	Timeout time.Duration `json:"timeout,omitempty"`
+
+	// Description of this registry instance
+	Description string `json:"description,omitempty"`
+
+	// InsecureSkipVerify disables TLS certificate verification (NOT RECOMMENDED for production)
+	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
+
+	// AllowHTTP allows using HTTP instead of HTTPS for DID resolution.
+	// WARNING: This should only be used for testing. The did:webvh spec requires HTTPS.
+	AllowHTTP bool `json:"allow_http,omitempty"`
+}
+
+// DIDDocument represents a W3C DID Document.
+// See https://www.w3.org/TR/did-core/
+type DIDDocument struct {
+	Context            interface{}          `json:"@context,omitempty"`
+	ID                 string               `json:"id"`
+	Controller         interface{}          `json:"controller,omitempty"`
+	AlsoKnownAs        []string             `json:"alsoKnownAs,omitempty"`
+	VerificationMethod []VerificationMethod `json:"verificationMethod,omitempty"`
+	Authentication     interface{}          `json:"authentication,omitempty"`
+	AssertionMethod    interface{}          `json:"assertionMethod,omitempty"`
+	KeyAgreement       interface{}          `json:"keyAgreement,omitempty"`
+	Service            interface{}          `json:"service,omitempty"`
+}
+
+// VerificationMethod represents a verification method in a DID document.
+type VerificationMethod struct {
+	ID                 string                 `json:"id"`
+	Type               string                 `json:"type"`
+	Controller         string                 `json:"controller"`
+	PublicKeyJwk       map[string]interface{} `json:"publicKeyJwk,omitempty"`
+	PublicKeyMultibase string                 `json:"publicKeyMultibase,omitempty"`
+}
+
+// DIDLogEntry represents a single entry in the did:webvh DID Log.
+type DIDLogEntry struct {
+	VersionID   string                   `json:"versionId"`
+	VersionTime string                   `json:"versionTime"`
+	Parameters  DIDParameters            `json:"parameters"`
+	State       DIDDocument              `json:"state"`
+	Proof       []map[string]interface{} `json:"proof,omitempty"`
+}
+
+// DIDParameters holds the parameters for DID processing.
+type DIDParameters struct {
+	// Method specifies the did:webvh specification version (e.g., "did:webvh:1.0")
+	Method string `json:"method,omitempty"`
+
+	// SCID is the self-certifying identifier (required in first entry only)
+	SCID string `json:"scid,omitempty"`
+
+	// UpdateKeys are multikey-formatted public keys authorized to sign updates
+	UpdateKeys []string `json:"updateKeys,omitempty"`
+
+	// NextKeyHashes are hashes of pre-rotation keys for the next entry
+	NextKeyHashes []string `json:"nextKeyHashes,omitempty"`
+
+	// Witness defines the witness configuration
+	Witness *WitnessConfig `json:"witness,omitempty"`
+
+	// Watchers is a list of watcher URLs
+	Watchers []string `json:"watchers,omitempty"`
+
+	// Portable indicates if the DID can be moved to a different location
+	Portable bool `json:"portable,omitempty"`
+
+	// Deactivated indicates if the DID has been deactivated
+	Deactivated bool `json:"deactivated,omitempty"`
+
+	// TTL is the time-to-live in seconds for caching
+	TTL int `json:"ttl,omitempty"`
+}
+
+// WitnessConfig defines the witness configuration for a DID.
+type WitnessConfig struct {
+	Threshold int            `json:"threshold,omitempty"`
+	Witnesses []WitnessEntry `json:"witnesses,omitempty"`
+}
+
+// WitnessEntry represents a single witness.
+type WitnessEntry struct {
+	ID string `json:"id"`
+}
+
+// DIDMetadata represents the resolution metadata for a did:webvh DID.
+type DIDMetadata struct {
+	VersionID   string         `json:"versionId"`
+	VersionTime string         `json:"versionTime"`
+	Created     string         `json:"created"`
+	Updated     string         `json:"updated"`
+	SCID        string         `json:"scid"`
+	Portable    bool           `json:"portable"`
+	Deactivated bool           `json:"deactivated"`
+	TTL         string         `json:"ttl,omitempty"`
+	Witness     *WitnessConfig `json:"witness,omitempty"`
+	Watchers    []string       `json:"watchers,omitempty"`
+}
+
+// NewDIDWebVHRegistry creates a new did:webvh trust registry.
+func NewDIDWebVHRegistry(config Config) (*DIDWebVHRegistry, error) {
+	timeout := config.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+
+	description := config.Description
+	if description == "" {
+		description = "DID WebVH Method (did:webvh) Registry - Verifiable History"
+	}
+
+	// Configure TLS with strong security settings per spec
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+		},
+		InsecureSkipVerify: config.InsecureSkipVerify,
+	}
+
+	httpClient := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+	}
+
+	return &DIDWebVHRegistry{
+		httpClient:  httpClient,
+		timeout:     timeout,
+		description: description,
+		allowHTTP:   config.AllowHTTP,
+	}, nil
+}
+
+// Evaluate implements TrustRegistry.Evaluate by resolving did:webvh DIDs and validating key bindings.
+func (r *DIDWebVHRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
+	startTime := time.Now()
+
+	// Validate that subject.id is a did:webvh identifier
+	if !strings.HasPrefix(req.Subject.ID, "did:webvh:") {
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"error": fmt.Sprintf("subject.id must be a did:webvh identifier, got: %s", req.Subject.ID),
+				},
+			},
+		}, nil
+	}
+
+	// Extract the base DID without fragment
+	baseDID := req.Subject.ID
+	if idx := strings.Index(baseDID, "#"); idx != -1 {
+		baseDID = baseDID[:idx]
+	}
+
+	// Resolve the DID document by processing the DID Log
+	didDoc, metadata, err := r.resolveDID(ctx, baseDID)
+	if err != nil {
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"error":         fmt.Sprintf("failed to resolve DID: %v", err),
+					"resolution_ms": time.Since(startTime).Milliseconds(),
+				},
+			},
+		}, nil
+	}
+
+	// Check if DID is deactivated
+	if metadata.Deactivated {
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"error":       "DID has been deactivated",
+					"deactivated": true,
+					"scid":        metadata.SCID,
+				},
+			},
+		}, nil
+	}
+
+	// Check if this is a resolution-only request
+	if req.IsResolutionOnlyRequest() {
+		return r.buildResolutionOnlyResponse(didDoc, metadata, startTime), nil
+	}
+
+	// For full trust evaluation, validate the key binding
+	matched, matchedMethod, err := r.verifyKeyBinding(req, didDoc)
+	if err != nil {
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"error":         err.Error(),
+					"resolution_ms": time.Since(startTime).Milliseconds(),
+				},
+			},
+		}, nil
+	}
+
+	if !matched {
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"error":                "no matching verification method found in DID document",
+					"verification_methods": len(didDoc.VerificationMethod),
+					"resolution_ms":        time.Since(startTime).Milliseconds(),
+				},
+			},
+		}, nil
+	}
+
+	// Success - key binding is valid
+	return &authzen.EvaluationResponse{
+		Decision: true,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: map[string]interface{}{
+				"did":                  didDoc.ID,
+				"verification_method":  matchedMethod.ID,
+				"key_type":             matchedMethod.Type,
+				"resolution_ms":        time.Since(startTime).Milliseconds(),
+				"verification_methods": len(didDoc.VerificationMethod),
+				"scid":                 metadata.SCID,
+				"verifiable_history":   true,
+			},
+			TrustMetadata: r.didDocumentToTrustMetadata(didDoc, metadata),
+		},
+	}, nil
+}
+
+// buildResolutionOnlyResponse creates an EvaluationResponse for resolution-only requests.
+func (r *DIDWebVHRegistry) buildResolutionOnlyResponse(didDoc *DIDDocument, metadata *DIDMetadata, startTime time.Time) *authzen.EvaluationResponse {
+	return &authzen.EvaluationResponse{
+		Decision: true,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: map[string]interface{}{
+				"did":                  didDoc.ID,
+				"resolution_only":      true,
+				"resolution_ms":        time.Since(startTime).Milliseconds(),
+				"verification_methods": len(didDoc.VerificationMethod),
+				"scid":                 metadata.SCID,
+				"verifiable_history":   true,
+				"version_id":           metadata.VersionID,
+			},
+			TrustMetadata: r.didDocumentToTrustMetadata(didDoc, metadata),
+		},
+	}
+}
+
+// didDocumentToTrustMetadata converts a DIDDocument and metadata to trust_metadata format.
+func (r *DIDWebVHRegistry) didDocumentToTrustMetadata(didDoc *DIDDocument, metadata *DIDMetadata) map[string]interface{} {
+	trustMeta := map[string]interface{}{
+		"@context": didDoc.Context,
+		"id":       didDoc.ID,
+	}
+
+	if didDoc.Controller != nil {
+		trustMeta["controller"] = didDoc.Controller
+	}
+
+	if len(didDoc.AlsoKnownAs) > 0 {
+		trustMeta["alsoKnownAs"] = didDoc.AlsoKnownAs
+	}
+
+	if len(didDoc.VerificationMethod) > 0 {
+		verificationMethods := make([]map[string]interface{}, len(didDoc.VerificationMethod))
+		for i, vm := range didDoc.VerificationMethod {
+			method := map[string]interface{}{
+				"id":         vm.ID,
+				"type":       vm.Type,
+				"controller": vm.Controller,
+			}
+			if vm.PublicKeyJwk != nil {
+				method["publicKeyJwk"] = vm.PublicKeyJwk
+			}
+			if vm.PublicKeyMultibase != "" {
+				method["publicKeyMultibase"] = vm.PublicKeyMultibase
+			}
+			verificationMethods[i] = method
+		}
+		trustMeta["verificationMethod"] = verificationMethods
+	}
+
+	if didDoc.Authentication != nil {
+		trustMeta["authentication"] = didDoc.Authentication
+	}
+
+	if didDoc.AssertionMethod != nil {
+		trustMeta["assertionMethod"] = didDoc.AssertionMethod
+	}
+
+	if didDoc.KeyAgreement != nil {
+		trustMeta["keyAgreement"] = didDoc.KeyAgreement
+	}
+
+	if didDoc.Service != nil {
+		trustMeta["service"] = didDoc.Service
+	}
+
+	// Include did:webvh-specific metadata
+	if metadata != nil {
+		trustMeta["didResolutionMetadata"] = map[string]interface{}{
+			"versionId":   metadata.VersionID,
+			"versionTime": metadata.VersionTime,
+			"created":     metadata.Created,
+			"updated":     metadata.Updated,
+			"scid":        metadata.SCID,
+			"portable":    metadata.Portable,
+			"deactivated": metadata.Deactivated,
+		}
+		if metadata.TTL != "" {
+			trustMeta["didResolutionMetadata"].(map[string]interface{})["ttl"] = metadata.TTL
+		}
+	}
+
+	return trustMeta
+}
+
+// resolveDID resolves a did:webvh identifier to a DID document.
+// It fetches and verifies the DID Log, returning the current DID document and metadata.
+func (r *DIDWebVHRegistry) resolveDID(ctx context.Context, did string) (*DIDDocument, *DIDMetadata, error) {
+	// Parse the DID to extract SCID and location
+	scid, httpURL, err := r.didToHTTPURL(did)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid did:webvh identifier: %w", err)
+	}
+
+	// For testing: allow HTTP instead of HTTPS
+	if r.allowHTTP {
+		httpURL = strings.Replace(httpURL, "https://", "http://", 1)
+	}
+
+	// Fetch the DID Log
+	req, err := http.NewRequestWithContext(ctx, "GET", httpURL, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	req.Header.Set("Accept", "text/jsonl, application/json")
+	req.Header.Set("User-Agent", "go-trust/1.0 (did:webvh)")
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
+	}
+
+	// Parse and verify the DID Log
+	return r.processDIDLog(resp.Body, scid, did)
+}
+
+// didToHTTPURL converts a did:webvh identifier to an HTTPS URL for the DID Log.
+//
+// Returns the SCID and the URL for the did.jsonl file.
+//
+// Format: did:webvh:<scid>:<domain>[:path]/
+// Example: did:webvh:QmXYZ123:example.com -> https://example.com/.well-known/did.jsonl
+// Example: did:webvh:QmXYZ123:example.com:dids:issuer -> https://example.com/dids/issuer/did.jsonl
+func (r *DIDWebVHRegistry) didToHTTPURL(did string) (scid string, httpURL string, err error) {
+	// Remove "did:webvh:" prefix
+	if !strings.HasPrefix(did, "did:webvh:") {
+		return "", "", fmt.Errorf("not a did:webvh identifier")
+	}
+
+	methodSpecificID := strings.TrimPrefix(did, "did:webvh:")
+
+	// The SCID is the first segment (46 characters of base58btc)
+	parts := strings.SplitN(methodSpecificID, ":", 2)
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("missing domain in did:webvh identifier")
+	}
+
+	scid = parts[0]
+	remainder := parts[1]
+
+	// Validate SCID format (should be base58btc encoded, typically 46 chars for SHA-256 multihash)
+	if !isValidSCID(scid) {
+		return "", "", fmt.Errorf("invalid SCID format: %s", scid)
+	}
+
+	// Handle percent-encoded port colons
+	remainder = strings.ReplaceAll(remainder, "%3A", "___PORT___")
+	remainder = strings.ReplaceAll(remainder, "%3a", "___PORT___")
+
+	// Split by colon to separate domain and path components
+	domainAndPath := strings.Split(remainder, ":")
+
+	// First part is the domain name
+	domain := strings.ReplaceAll(domainAndPath[0], "___PORT___", ":")
+
+	// Build the path from remaining parts
+	var path string
+	if len(domainAndPath) > 1 {
+		pathParts := []string{}
+		for _, part := range domainAndPath[1:] {
+			cleaned := strings.ReplaceAll(part, "___PORT___", ":")
+			if cleaned != "" {
+				pathParts = append(pathParts, cleaned)
+			}
+		}
+		if len(pathParts) > 0 {
+			path = "/" + strings.Join(pathParts, "/")
+		} else {
+			path = "/.well-known"
+		}
+	} else {
+		path = "/.well-known"
+	}
+
+	// Construct the HTTPS URL for did.jsonl
+	httpURL = fmt.Sprintf("https://%s%s/did.jsonl", domain, path)
+
+	// Validate the URL
+	if _, err := url.Parse(httpURL); err != nil {
+		return "", "", fmt.Errorf("invalid URL: %w", err)
+	}
+
+	return scid, httpURL, nil
+}
+
+// isValidSCID validates the format of a Self-Certifying Identifier.
+// SCIDs are base58btc-encoded multihashes, typically 46 characters for SHA-256.
+func isValidSCID(scid string) bool {
+	// Base58btc character set (no 0, O, I, l)
+	base58Pattern := regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]+$`)
+	if !base58Pattern.MatchString(scid) {
+		return false
+	}
+	// SHA-256 multihash in base58btc is typically 46 characters
+	// Allow some flexibility for different hash algorithms
+	return len(scid) >= 32 && len(scid) <= 64
+}
+
+// processDIDLog reads and verifies the DID Log, returning the current DID document and metadata.
+func (r *DIDWebVHRegistry) processDIDLog(reader io.Reader, expectedSCID string, did string) (*DIDDocument, *DIDMetadata, error) {
+	scanner := bufio.NewScanner(reader)
+
+	var entries []DIDLogEntry
+	var currentParams DIDParameters
+	var metadata DIDMetadata
+	var prevVersionID string
+	versionNumber := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		var entry DIDLogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			return nil, nil, fmt.Errorf("failed to parse DID Log entry %d: %w", versionNumber+1, err)
+		}
+
+		versionNumber++
+
+		// Merge parameters (new values override previous)
+		mergeParameters(&currentParams, &entry.Parameters)
+
+		// Verify version number in versionId
+		expectedVersionPrefix := fmt.Sprintf("%d-", versionNumber)
+		if !strings.HasPrefix(entry.VersionID, expectedVersionPrefix) {
+			return nil, nil, fmt.Errorf("invalid versionId at entry %d: expected prefix '%s', got '%s'", versionNumber, expectedVersionPrefix, entry.VersionID)
+		}
+
+		// Extract entryHash from versionId
+		entryHash := strings.TrimPrefix(entry.VersionID, expectedVersionPrefix)
+
+		// For the first entry, verify the SCID
+		if versionNumber == 1 {
+			if currentParams.SCID == "" {
+				return nil, nil, fmt.Errorf("missing SCID in first log entry parameters")
+			}
+			if currentParams.SCID != expectedSCID {
+				return nil, nil, fmt.Errorf("SCID mismatch: expected %s, got %s", expectedSCID, currentParams.SCID)
+			}
+
+			// Verify SCID derivation
+			if err := r.verifySCID(&entry); err != nil {
+				return nil, nil, fmt.Errorf("SCID verification failed: %w", err)
+			}
+
+			metadata.Created = entry.VersionTime
+			metadata.SCID = currentParams.SCID
+			prevVersionID = currentParams.SCID
+		} else {
+			prevVersionID = entries[len(entries)-1].VersionID
+		}
+
+		// Verify entry hash
+		if err := r.verifyEntryHash(&entry, prevVersionID, entryHash); err != nil {
+			return nil, nil, fmt.Errorf("entry hash verification failed at entry %d: %w", versionNumber, err)
+		}
+
+		// Verify Data Integrity proof
+		if err := r.verifyProof(&entry, &currentParams); err != nil {
+			return nil, nil, fmt.Errorf("proof verification failed at entry %d: %w", versionNumber, err)
+		}
+
+		// Verify pre-rotation if active
+		if versionNumber > 1 && len(entries[len(entries)-1].Parameters.NextKeyHashes) > 0 {
+			if err := r.verifyPreRotation(&entry, &entries[len(entries)-1].Parameters); err != nil {
+				return nil, nil, fmt.Errorf("pre-rotation verification failed at entry %d: %w", versionNumber, err)
+			}
+		}
+
+		// Validate versionTime
+		if err := r.validateVersionTime(&entry, entries); err != nil {
+			return nil, nil, fmt.Errorf("versionTime validation failed at entry %d: %w", versionNumber, err)
+		}
+
+		entries = append(entries, entry)
+		metadata.Updated = entry.VersionTime
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, nil, fmt.Errorf("error reading DID Log: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return nil, nil, fmt.Errorf("empty DID Log")
+	}
+
+	// Get the current (last) DID document
+	lastEntry := entries[len(entries)-1]
+	didDoc := &lastEntry.State
+
+	// Verify the DID matches the document ID
+	if !strings.Contains(didDoc.ID, expectedSCID) {
+		return nil, nil, fmt.Errorf("DID document ID does not contain expected SCID")
+	}
+
+	// Populate metadata
+	metadata.VersionID = lastEntry.VersionID
+	metadata.VersionTime = lastEntry.VersionTime
+	metadata.Portable = currentParams.Portable
+	metadata.Deactivated = currentParams.Deactivated
+	if currentParams.TTL > 0 {
+		metadata.TTL = fmt.Sprintf("%d", currentParams.TTL)
+	}
+	metadata.Witness = currentParams.Witness
+	metadata.Watchers = currentParams.Watchers
+
+	return didDoc, &metadata, nil
+}
+
+// mergeParameters merges new parameters into the current active parameters.
+func mergeParameters(current *DIDParameters, new *DIDParameters) {
+	if new.Method != "" {
+		current.Method = new.Method
+	}
+	if new.SCID != "" {
+		current.SCID = new.SCID
+	}
+	if len(new.UpdateKeys) > 0 {
+		current.UpdateKeys = new.UpdateKeys
+	}
+	if new.NextKeyHashes != nil {
+		current.NextKeyHashes = new.NextKeyHashes
+	}
+	if new.Witness != nil {
+		current.Witness = new.Witness
+	}
+	if new.Watchers != nil {
+		current.Watchers = new.Watchers
+	}
+	// Portable can only be set in first entry
+	if new.Portable {
+		current.Portable = true
+	}
+	if new.Deactivated {
+		current.Deactivated = true
+	}
+	if new.TTL > 0 {
+		current.TTL = new.TTL
+	}
+}
+
+// verifySCID verifies that the SCID was correctly derived from the first log entry.
+func (r *DIDWebVHRegistry) verifySCID(entry *DIDLogEntry) error {
+	// Create a copy of the entry without the proof and with placeholder versionId
+	entryCopy := *entry
+	entryCopy.Proof = nil
+	entryCopy.VersionID = "{SCID}"
+
+	// Get SCID from parameters
+	expectedSCID := entry.Parameters.SCID
+
+	// Replace SCID with placeholder throughout the entry
+	entryJSON, err := json.Marshal(&entryCopy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal entry for SCID verification: %w", err)
+	}
+
+	entryStr := string(entryJSON)
+	entryStr = strings.ReplaceAll(entryStr, expectedSCID, "{SCID}")
+
+	// Calculate the expected SCID
+	calculatedSCID, err := r.calculateMultihash([]byte(entryStr))
+	if err != nil {
+		return fmt.Errorf("failed to calculate SCID: %w", err)
+	}
+
+	if calculatedSCID != expectedSCID {
+		return fmt.Errorf("SCID mismatch: calculated %s, expected %s", calculatedSCID, expectedSCID)
+	}
+
+	return nil
+}
+
+// verifyEntryHash verifies that the entry hash was correctly derived.
+func (r *DIDWebVHRegistry) verifyEntryHash(entry *DIDLogEntry, prevVersionID string, expectedHash string) error {
+	// Create a copy of the entry without the proof
+	entryCopy := *entry
+	entryCopy.Proof = nil
+	entryCopy.VersionID = prevVersionID
+
+	// Serialize to JSON (JCS canonicalization would be ideal, but using standard JSON for now)
+	entryJSON, err := json.Marshal(&entryCopy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal entry for hash verification: %w", err)
+	}
+
+	// Calculate the hash
+	calculatedHash, err := r.calculateMultihash(entryJSON)
+	if err != nil {
+		return fmt.Errorf("failed to calculate entry hash: %w", err)
+	}
+
+	if calculatedHash != expectedHash {
+		return fmt.Errorf("entry hash mismatch: calculated %s, expected %s", calculatedHash, expectedHash)
+	}
+
+	return nil
+}
+
+// calculateMultihash calculates a base58btc-encoded multihash of the input data.
+// Uses SHA-256 as the hash algorithm per did:webvh v1.0 spec.
+func (r *DIDWebVHRegistry) calculateMultihash(data []byte) (string, error) {
+	// Calculate SHA-256 hash
+	hash := sha256.Sum256(data)
+
+	// Create multihash: prefix (0x12 = SHA-256, 0x20 = 32 bytes) + hash
+	multihash := make([]byte, 34)
+	multihash[0] = 0x12 // SHA-256 identifier
+	multihash[1] = 0x20 // 32 bytes
+	copy(multihash[2:], hash[:])
+
+	// Encode as base58btc
+	return base58btcEncode(multihash), nil
+}
+
+// base58btcEncode encodes bytes to base58btc string.
+func base58btcEncode(data []byte) string {
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+	// Count leading zeros
+	zeros := 0
+	for _, b := range data {
+		if b == 0 {
+			zeros++
+		} else {
+			break
+		}
+	}
+
+	// Allocate enough space
+	size := len(data)*138/100 + 1
+	buf := make([]byte, size)
+
+	var length int
+	for _, b := range data {
+		carry := int(b)
+		for i := 0; i < length || carry != 0; i++ {
+			if i < length {
+				carry += 256 * int(buf[i])
+			}
+			buf[i] = byte(carry % 58)
+			carry /= 58
+			if i >= length {
+				length = i + 1
+			}
+		}
+	}
+
+	// Build result
+	result := make([]byte, zeros+length)
+	for i := 0; i < zeros; i++ {
+		result[i] = '1'
+	}
+	for i := 0; i < length; i++ {
+		result[zeros+i] = alphabet[buf[length-1-i]]
+	}
+
+	return string(result)
+}
+
+// verifyProof verifies the Data Integrity proof on a log entry using eddsa-jcs-2022.
+func (r *DIDWebVHRegistry) verifyProof(entry *DIDLogEntry, params *DIDParameters) error {
+	if len(entry.Proof) == 0 {
+		return fmt.Errorf("missing proof in log entry")
+	}
+
+	proof := entry.Proof[0]
+
+	// Verify basic proof structure
+	proofType, ok := proof["type"].(string)
+	if !ok {
+		return fmt.Errorf("missing or invalid proof type")
+	}
+
+	// did:webvh v1.0 requires eddsa-jcs-2022 cryptosuite
+	if proofType != "DataIntegrityProof" {
+		return fmt.Errorf("unexpected proof type: %s (expected DataIntegrityProof)", proofType)
+	}
+
+	cryptosuite, _ := proof["cryptosuite"].(string)
+	if cryptosuite != jcs.CryptosuiteEdDSAJCS2022 {
+		return fmt.Errorf("invalid cryptosuite: expected %s, got %s", jcs.CryptosuiteEdDSAJCS2022, cryptosuite)
+	}
+
+	// Verify proof purpose
+	proofPurpose, _ := proof["proofPurpose"].(string)
+	if proofPurpose != "assertionMethod" {
+		return fmt.Errorf("invalid proofPurpose: expected 'assertionMethod', got '%s'", proofPurpose)
+	}
+
+	// Verify the verification method references an updateKey
+	verificationMethod, _ := proof["verificationMethod"].(string)
+	if verificationMethod == "" {
+		return fmt.Errorf("missing verificationMethod in proof")
+	}
+
+	// Verify proof value exists
+	proofValue, _ := proof["proofValue"].(string)
+	if proofValue == "" {
+		return fmt.Errorf("missing proofValue in proof")
+	}
+
+	// Find the public key for verification from updateKeys
+	publicKey, err := r.findPublicKey(verificationMethod, params)
+	if err != nil {
+		return fmt.Errorf("failed to find verification key: %w", err)
+	}
+
+	// Convert the entry to a map for verification
+	entryMap, err := r.entryToMap(entry)
+	if err != nil {
+		return fmt.Errorf("failed to convert entry to map: %w", err)
+	}
+
+	// Verify the signature using eddsa-jcs-2022
+	suite := jcs.NewSuite()
+	if err := suite.VerifyWithProof(entryMap, proof, publicKey); err != nil {
+		return fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	return nil
+}
+
+// findPublicKey finds the Ed25519 public key for the given verification method.
+func (r *DIDWebVHRegistry) findPublicKey(verificationMethod string, params *DIDParameters) (ed25519.PublicKey, error) {
+	// The verificationMethod in did:webvh proofs references one of the updateKeys
+	// UpdateKeys are in multikey format: did:key:z... or just z... (multibase-encoded Ed25519 public key)
+
+	for _, updateKey := range params.UpdateKeys {
+		// Check if this updateKey matches the verification method
+		// Verification method format: did:key:z... or #z...
+		keyID := updateKey
+		if strings.HasPrefix(updateKey, "did:key:") {
+			keyID = strings.TrimPrefix(updateKey, "did:key:")
+		}
+
+		if strings.Contains(verificationMethod, keyID) || updateKey == verificationMethod {
+			return r.decodeMultikey(updateKey)
+		}
+	}
+
+	return nil, fmt.Errorf("no matching updateKey found for verification method: %s", verificationMethod)
+}
+
+// decodeMultikey decodes a multikey-formatted Ed25519 public key.
+// Multikey format for Ed25519: z6Mk... (multibase base58btc + multicodec prefix 0xed01)
+func (r *DIDWebVHRegistry) decodeMultikey(multikey string) (ed25519.PublicKey, error) {
+	// Remove did:key: prefix if present
+	key := multikey
+	if strings.HasPrefix(key, "did:key:") {
+		key = strings.TrimPrefix(key, "did:key:")
+	}
+
+	// Decode multibase
+	_, data, err := multibase.Decode(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode multibase: %w", err)
+	}
+
+	// Check multicodec prefix for Ed25519 public key (0xed01)
+	// Multicodec is varint-encoded: 0xed 0x01 for Ed25519 public key
+	if len(data) < 2 || data[0] != 0xed || data[1] != 0x01 {
+		return nil, fmt.Errorf("invalid multicodec prefix: expected Ed25519 public key (0xed01)")
+	}
+
+	// Extract the raw public key bytes (32 bytes for Ed25519)
+	pubKeyBytes := data[2:]
+	if len(pubKeyBytes) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid Ed25519 public key length: expected %d, got %d", ed25519.PublicKeySize, len(pubKeyBytes))
+	}
+
+	return ed25519.PublicKey(pubKeyBytes), nil
+}
+
+// entryToMap converts a DIDLogEntry to a map[string]any for signature verification.
+func (r *DIDWebVHRegistry) entryToMap(entry *DIDLogEntry) (map[string]any, error) {
+	// Marshal to JSON and back to get a map representation
+	jsonBytes, err := json.Marshal(entry)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(jsonBytes, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// verifyPreRotation verifies that updateKeys match the nextKeyHashes from the previous entry.
+func (r *DIDWebVHRegistry) verifyPreRotation(entry *DIDLogEntry, prevParams *DIDParameters) error {
+	if len(prevParams.NextKeyHashes) == 0 {
+		return nil // Pre-rotation not active
+	}
+
+	if len(entry.Parameters.UpdateKeys) == 0 {
+		return fmt.Errorf("updateKeys required when pre-rotation is active")
+	}
+
+	// Verify each updateKey has its hash in the previous nextKeyHashes
+	for _, updateKey := range entry.Parameters.UpdateKeys {
+		keyHash, err := r.calculateMultihash([]byte(updateKey))
+		if err != nil {
+			return fmt.Errorf("failed to hash updateKey: %w", err)
+		}
+
+		found := false
+		for _, expectedHash := range prevParams.NextKeyHashes {
+			if keyHash == expectedHash {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("updateKey hash not found in previous nextKeyHashes")
+		}
+	}
+
+	return nil
+}
+
+// validateVersionTime validates that versionTime is properly ordered.
+func (r *DIDWebVHRegistry) validateVersionTime(entry *DIDLogEntry, prevEntries []DIDLogEntry) error {
+	entryTime, err := time.Parse(time.RFC3339, entry.VersionTime)
+	if err != nil {
+		return fmt.Errorf("invalid versionTime format: %w", err)
+	}
+
+	// Verify time is not in the future
+	if entryTime.After(time.Now().Add(time.Minute)) {
+		return fmt.Errorf("versionTime is in the future")
+	}
+
+	// Verify time is after previous entry
+	if len(prevEntries) > 0 {
+		prevTime, err := time.Parse(time.RFC3339, prevEntries[len(prevEntries)-1].VersionTime)
+		if err == nil && !entryTime.After(prevTime) {
+			return fmt.Errorf("versionTime must be after previous entry's time")
+		}
+	}
+
+	return nil
+}
+
+// verifyKeyBinding checks if the key in the request matches a verification method in the DID document.
+func (r *DIDWebVHRegistry) verifyKeyBinding(req *authzen.EvaluationRequest, didDoc *DIDDocument) (bool, *VerificationMethod, error) {
+	if req.Resource.Type == "jwk" {
+		return r.matchJWK(req.Resource.Key, didDoc)
+	}
+	return false, nil, fmt.Errorf("resource type %s not yet supported for did:webvh", req.Resource.Type)
+}
+
+// matchJWK attempts to match a JWK from the request against verification methods in the DID document.
+func (r *DIDWebVHRegistry) matchJWK(keyArray []interface{}, didDoc *DIDDocument) (bool, *VerificationMethod, error) {
+	if len(keyArray) == 0 {
+		return false, nil, fmt.Errorf("empty key array")
+	}
+
+	requestJWK, ok := keyArray[0].(map[string]interface{})
+	if !ok {
+		return false, nil, fmt.Errorf("invalid JWK format")
+	}
+
+	for i := range didDoc.VerificationMethod {
+		vm := &didDoc.VerificationMethod[i]
+		if vm.PublicKeyJwk == nil {
+			continue
+		}
+		if r.jwksMatch(requestJWK, vm.PublicKeyJwk) {
+			return true, vm, nil
+		}
+	}
+
+	return false, nil, nil
+}
+
+// jwksMatch compares two JWKs for equality.
+func (r *DIDWebVHRegistry) jwksMatch(jwk1, jwk2 map[string]interface{}) bool {
+	kty1, ok1 := jwk1["kty"].(string)
+	kty2, ok2 := jwk2["kty"].(string)
+	if !ok1 || !ok2 || kty1 != kty2 {
+		return false
+	}
+
+	switch kty1 {
+	case "OKP", "EC":
+		crv1, _ := jwk1["crv"].(string)
+		crv2, _ := jwk2["crv"].(string)
+		if crv1 != crv2 {
+			return false
+		}
+		x1, _ := jwk1["x"].(string)
+		x2, _ := jwk2["x"].(string)
+		if x1 != x2 {
+			return false
+		}
+		if kty1 == "EC" {
+			y1, _ := jwk1["y"].(string)
+			y2, _ := jwk2["y"].(string)
+			if y1 != y2 {
+				return false
+			}
+		}
+		return true
+	case "RSA":
+		n1, _ := jwk1["n"].(string)
+		n2, _ := jwk2["n"].(string)
+		if n1 != n2 {
+			return false
+		}
+		e1, _ := jwk1["e"].(string)
+		e2, _ := jwk2["e"].(string)
+		return e1 == e2
+	default:
+		return false
+	}
+}
+
+// SupportedResourceTypes returns the resource types this registry can handle.
+func (r *DIDWebVHRegistry) SupportedResourceTypes() []string {
+	return []string{"jwk"}
+}
+
+// SupportsResolutionOnly returns true for did:webvh registry.
+func (r *DIDWebVHRegistry) SupportsResolutionOnly() bool {
+	return true
+}
+
+// Info returns metadata about this registry.
+func (r *DIDWebVHRegistry) Info() registry.RegistryInfo {
+	return registry.RegistryInfo{
+		Name:        "didwebvh-registry",
+		Type:        "did:webvh",
+		Description: r.description,
+		Version:     "1.0.0",
+		TrustAnchors: []string{
+			"Self-certifying identifier (SCID) verification",
+			"Verifiable history chain validation",
+			"Data Integrity proof verification",
+			"HTTPS/TLS certificate validation",
+		},
+	}
+}
+
+// Healthy returns true if the registry is operational.
+func (r *DIDWebVHRegistry) Healthy() bool {
+	return r.httpClient != nil
+}
+
+// Refresh is a no-op for did:webvh since DIDs are resolved on-demand.
+func (r *DIDWebVHRegistry) Refresh(ctx context.Context) error {
+	return nil
+}
+
+// SetHTTPClient sets a custom HTTP client for the registry.
+func (r *DIDWebVHRegistry) SetHTTPClient(client *http.Client) {
+	r.httpClient = client
+}
