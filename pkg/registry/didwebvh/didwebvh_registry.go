@@ -23,10 +23,11 @@ import (
 	"strings"
 	"time"
 
+	"vc/pkg/vc20/crypto/jcs"
+
 	"github.com/multiformats/go-multibase"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
-	"vc/pkg/vc20/crypto/jcs"
 )
 
 // DIDWebVHRegistry implements a trust registry using the did:webvh method.
@@ -633,26 +634,46 @@ func mergeParameters(current *DIDParameters, new *DIDParameters) {
 }
 
 // verifySCID verifies that the SCID was correctly derived from the first log entry.
+// Per did:webvh v1.0 spec, the SCID is calculated from the JCS-canonicalized JSON
+// of the initial log entry with:
+// - All occurrences of the SCID replaced with {SCID} placeholder (string replacement)
+// - versionId set to "{SCID}"
+// - Proof field removed
 func (r *DIDWebVHRegistry) verifySCID(entry *DIDLogEntry) error {
-	// Create a copy of the entry without the proof and with placeholder versionId
+	// Get SCID from parameters
+	expectedSCID := entry.Parameters.SCID
+
+	// Create a copy of the entry for SCID calculation
 	entryCopy := *entry
 	entryCopy.Proof = nil
 	entryCopy.VersionID = "{SCID}"
 
-	// Get SCID from parameters
-	expectedSCID := entry.Parameters.SCID
-
-	// Replace SCID with placeholder throughout the entry
+	// Marshal to JSON first
 	entryJSON, err := json.Marshal(&entryCopy)
 	if err != nil {
 		return fmt.Errorf("failed to marshal entry for SCID verification: %w", err)
 	}
 
-	entryStr := string(entryJSON)
-	entryStr = strings.ReplaceAll(entryStr, expectedSCID, "{SCID}")
+	// Replace ALL occurrences of the SCID with the placeholder
+	// This is needed because the SCID appears in the DID document (state) as well
+	entryStr := strings.ReplaceAll(string(entryJSON), expectedSCID, "{SCID}")
 
-	// Calculate the expected SCID
-	calculatedSCID, err := r.calculateMultihash([]byte(entryStr))
+	// Parse back to map for proper JCS canonicalization
+	// (passing []byte directly to jcs.Canonicalize would cause json.Marshal to
+	// encode it as base64)
+	var entryMap map[string]interface{}
+	if err := json.Unmarshal([]byte(entryStr), &entryMap); err != nil {
+		return fmt.Errorf("failed to parse entry for SCID verification: %w", err)
+	}
+
+	// Apply JCS canonicalization
+	canonicalJSON, err := jcs.Canonicalize(entryMap)
+	if err != nil {
+		return fmt.Errorf("failed to canonicalize entry for SCID verification: %w", err)
+	}
+
+	// Calculate the expected SCID from the canonical JSON
+	calculatedSCID, err := r.calculateMultihash(canonicalJSON)
 	if err != nil {
 		return fmt.Errorf("failed to calculate SCID: %w", err)
 	}
@@ -665,20 +686,38 @@ func (r *DIDWebVHRegistry) verifySCID(entry *DIDLogEntry) error {
 }
 
 // verifyEntryHash verifies that the entry hash was correctly derived.
+// Per did:webvh v1.0 spec, the entry hash is calculated from the JCS-canonicalized JSON
+// of the log entry with:
+// - versionId set to the previous entry's versionId
+// - Proof field removed
 func (r *DIDWebVHRegistry) verifyEntryHash(entry *DIDLogEntry, prevVersionID string, expectedHash string) error {
 	// Create a copy of the entry without the proof
 	entryCopy := *entry
 	entryCopy.Proof = nil
 	entryCopy.VersionID = prevVersionID
 
-	// Serialize to JSON (JCS canonicalization would be ideal, but using standard JSON for now)
+	// Marshal to JSON
 	entryJSON, err := json.Marshal(&entryCopy)
 	if err != nil {
 		return fmt.Errorf("failed to marshal entry for hash verification: %w", err)
 	}
 
+	// Parse back to map for proper JCS canonicalization
+	// (passing []byte directly to jcs.Canonicalize would cause json.Marshal to
+	// encode it as base64)
+	var entryMap map[string]interface{}
+	if err := json.Unmarshal(entryJSON, &entryMap); err != nil {
+		return fmt.Errorf("failed to parse entry for hash verification: %w", err)
+	}
+
+	// Apply JCS canonicalization per did:webvh spec
+	canonicalJSON, err := jcs.Canonicalize(entryMap)
+	if err != nil {
+		return fmt.Errorf("failed to canonicalize entry for hash verification: %w", err)
+	}
+
 	// Calculate the hash
-	calculatedHash, err := r.calculateMultihash(entryJSON)
+	calculatedHash, err := r.calculateMultihash(canonicalJSON)
 	if err != nil {
 		return fmt.Errorf("failed to calculate entry hash: %w", err)
 	}

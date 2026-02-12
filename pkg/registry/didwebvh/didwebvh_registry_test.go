@@ -564,3 +564,156 @@ func TestMergeParameters(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// Live Integration Tests
+// =============================================================================
+
+// TestPublicMediatorResolution tests resolution of the public mediator DID.
+// This test requires network access and is skipped if the mediator is unavailable.
+func TestPublicMediatorResolution(t *testing.T) {
+	// Public mediator DID
+	mediatorDID := "did:webvh:QmetnhxzJXTJ9pyXR1BbZ2h6DomY6SB1ZbzFPrjYyaEq9V:fpp.storm.ws:public-mediator"
+
+	t.Logf("Testing resolution of public mediator: %s", mediatorDID)
+
+	// Create registry with reasonable timeout
+	registry, err := NewDIDWebVHRegistry(Config{
+		Timeout:     60 * time.Second,
+		Description: "Public mediator integration test",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create registry: %v", err)
+	}
+
+	// First, test URL construction
+	scid, httpURL, err := registry.didToHTTPURL(mediatorDID)
+	if err != nil {
+		t.Fatalf("didToHTTPURL failed: %v", err)
+	}
+
+	t.Logf("  SCID: %s", scid)
+	t.Logf("  URL: %s", httpURL)
+
+	expectedURL := "https://fpp.storm.ws/public-mediator/did.jsonl"
+	if httpURL != expectedURL {
+		t.Errorf("URL mismatch: got %s, want %s", httpURL, expectedURL)
+	}
+
+	// Now test actual resolution
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Create a resolution-only request
+	req := &authzen.EvaluationRequest{
+		Subject:  authzen.Subject{Type: "did", ID: mediatorDID},
+		Resource: authzen.Resource{Type: "resolution", ID: mediatorDID},
+	}
+
+	t.Log("Resolving DID document...")
+	resp, err := registry.Evaluate(ctx, req)
+	if err != nil {
+		t.Fatalf("Evaluate failed: %v", err)
+	}
+
+	// Log the full response for debugging
+	if resp.Context != nil && resp.Context.Reason != nil {
+		t.Logf("Response reason: %v", resp.Context.Reason)
+	}
+
+	if !resp.Decision {
+		// Check if it's a network error - skip in that case
+		if resp.Context != nil && resp.Context.Reason != nil {
+			reason := resp.Context.Reason
+			if errMsg, ok := reason["error"].(string); ok {
+				if strings.Contains(errMsg, "context deadline exceeded") ||
+					strings.Contains(errMsg, "connection refused") ||
+					strings.Contains(errMsg, "no such host") ||
+					strings.Contains(errMsg, "i/o timeout") {
+					t.Skipf("Mediator not accessible: %s", errMsg)
+				}
+			}
+		}
+		t.Fatalf("DID resolution failed: decision=%v", resp.Decision)
+	}
+
+	t.Log("✓ DID resolution successful!")
+
+	// Verify trust metadata contains expected fields
+	if resp.Context != nil && resp.Context.TrustMetadata != nil {
+		meta, ok := resp.Context.TrustMetadata.(map[string]interface{})
+		if !ok {
+			t.Logf("TrustMetadata is not map[string]interface{}: %T", resp.Context.TrustMetadata)
+		} else {
+			// Check DID ID matches
+			if id, ok := meta["id"].(string); ok {
+				if id != mediatorDID {
+					t.Errorf("DID mismatch: got %s, want %s", id, mediatorDID)
+				}
+				t.Logf("  DID ID: %s", id)
+			}
+
+			// Check for verification methods
+			if vms, ok := meta["verificationMethod"].([]map[string]interface{}); ok {
+				t.Logf("  Verification methods: %d", len(vms))
+				for _, vm := range vms {
+					t.Logf("    - %v (%v)", vm["id"], vm["type"])
+				}
+			} else if vmsI, ok := meta["verificationMethod"].([]interface{}); ok {
+				t.Logf("  Verification methods: %d", len(vmsI))
+				for _, vm := range vmsI {
+					if vmMap, ok := vm.(map[string]interface{}); ok {
+						t.Logf("    - %v (%v)", vmMap["id"], vmMap["type"])
+					}
+				}
+			}
+
+			// Check for services (mediator should have DIDCommMessaging service)
+			if services, ok := meta["service"].([]interface{}); ok {
+				t.Logf("  Services: %d", len(services))
+				for _, svc := range services {
+					if svcMap, ok := svc.(map[string]interface{}); ok {
+						t.Logf("    - %v (%v)", svcMap["id"], svcMap["type"])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestPublicMediatorURLConstruction tests URL construction for the public mediator DID.
+func TestPublicMediatorURLConstruction(t *testing.T) {
+	registry, err := NewDIDWebVHRegistry(Config{})
+	if err != nil {
+		t.Fatalf("Failed to create registry: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		did      string
+		wantSCID string
+		wantURL  string
+	}{
+		{
+			name:     "public mediator",
+			did:      "did:webvh:QmetnhxzJXTJ9pyXR1BbZ2h6DomY6SB1ZbzFPrjYyaEq9V:fpp.storm.ws:public-mediator",
+			wantSCID: "QmetnhxzJXTJ9pyXR1BbZ2h6DomY6SB1ZbzFPrjYyaEq9V",
+			wantURL:  "https://fpp.storm.ws/public-mediator/did.jsonl",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scid, url, err := registry.didToHTTPURL(tt.did)
+			if err != nil {
+				t.Fatalf("didToHTTPURL failed: %v", err)
+			}
+			if scid != tt.wantSCID {
+				t.Errorf("SCID = %s, want %s", scid, tt.wantSCID)
+			}
+			if url != tt.wantURL {
+				t.Errorf("URL = %s, want %s", url, tt.wantURL)
+			}
+		})
+	}
+}
