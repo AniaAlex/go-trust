@@ -22,28 +22,60 @@ if [ ! -f "go.mod" ]; then
     exit 1
 fi
 
-# 1. Format check
-echo -e "${YELLOW}→ Checking code formatting...${NC}"
-UNFORMATTED=$(gofmt -l . 2>&1 | grep -v "vendor/" | grep ".go$" || true)
-if [ -n "$UNFORMATTED" ]; then
-    echo -e "${RED}✗ The following files are not formatted:${NC}"
-    echo "$UNFORMATTED"
-    echo -e "${YELLOW}  Run: make fmt${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✓ Code formatting OK${NC}"
+# Check if golangci-lint is installed
+check_golangci_lint() {
+    if ! command -v golangci-lint &> /dev/null; then
+        echo -e "${RED}✗ golangci-lint is not installed${NC}"
+        echo -e "${YELLOW}  Install it with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest${NC}"
+        echo -e "${YELLOW}  Or run: make tools${NC}"
+        return 1
+    fi
+    return 0
+}
 
-# 2. Go vet
-echo -e "${YELLOW}→ Running go vet...${NC}"
-VET_OUTPUT=$(go vet ./... 2>&1 | grep -v "vendor/" || true)
-if [ -n "$VET_OUTPUT" ]; then
-    echo -e "${RED}✗ go vet failed${NC}"
-    echo "$VET_OUTPUT"
-    exit 1
-fi
-echo -e "${GREEN}✓ go vet passed${NC}"
+# 1. Run golangci-lint (comprehensive linting including format, vet, and more)
+echo -e "${YELLOW}→ Running golangci-lint...${NC}"
+if check_golangci_lint; then
+    # Run golangci-lint on staged Go files only for speed
+    STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep "\.go$" || true)
+    if [ -n "$STAGED_GO_FILES" ]; then
+        if ! golangci-lint run --new-from-rev=HEAD~0 ./... 2>&1; then
+            echo -e "${RED}✗ golangci-lint failed${NC}"
+            echo -e "${YELLOW}  Fix the issues above and try again${NC}"
+            echo -e "${YELLOW}  Run: golangci-lint run ./... to see all issues${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✓ golangci-lint passed${NC}"
+    else
+        echo -e "${GREEN}✓ No Go files to lint${NC}"
+    fi
+else
+    # Fallback: basic checks if golangci-lint not installed
+    echo -e "${YELLOW}⚠ Falling back to basic checks...${NC}"
 
-# 3. Run tests
+    # Format check
+    echo -e "${YELLOW}→ Checking code formatting...${NC}"
+    UNFORMATTED=$(gofmt -l . 2>&1 | grep -v "vendor/" | grep ".go$" || true)
+    if [ -n "$UNFORMATTED" ]; then
+        echo -e "${RED}✗ The following files are not formatted:${NC}"
+        echo "$UNFORMATTED"
+        echo -e "${YELLOW}  Run: make fmt${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Code formatting OK${NC}"
+
+    # Go vet
+    echo -e "${YELLOW}→ Running go vet...${NC}"
+    VET_OUTPUT=$(go vet ./... 2>&1 | grep -v "vendor/" || true)
+    if [ -n "$VET_OUTPUT" ]; then
+        echo -e "${RED}✗ go vet failed${NC}"
+        echo "$VET_OUTPUT"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ go vet passed${NC}"
+fi
+
+# 2. Run tests
 echo -e "${YELLOW}→ Running tests...${NC}"
 if ! go test -short -race -timeout 2m ./... > /dev/null 2>&1; then
     echo -e "${RED}✗ Tests failed${NC}"
@@ -52,7 +84,7 @@ if ! go test -short -race -timeout 2m ./... > /dev/null 2>&1; then
 fi
 echo -e "${GREEN}✓ Tests passed${NC}"
 
-# 4. Check for common issues
+# 3. Check for common issues
 echo -e "${YELLOW}→ Checking for common issues...${NC}"
 
 # Check for debugging statements
@@ -74,7 +106,7 @@ fi
 
 echo -e "${GREEN}✓ Common issues check complete${NC}"
 
-# 5. Check go.mod/go.sum
+# 4. Check go.mod/go.sum
 echo -e "${YELLOW}→ Checking go.mod and go.sum...${NC}"
 if ! git diff --cached --name-only | grep -q "go.mod"; then
     # go.mod not staged, check if it needs updating

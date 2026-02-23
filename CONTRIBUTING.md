@@ -125,10 +125,17 @@ Commit message format:
 - `ci:` - CI/CD changes
 
 The pre-commit hook will automatically:
-- Check code formatting
-- Run `go vet`
+- Run `golangci-lint` for comprehensive linting (includes formatting, vet, security checks)
 - Run tests for changed packages
-- Check for common issues
+- Check for common issues (debug statements, TODOs)
+- Verify go.mod/go.sum are up to date
+
+If the pre-commit hook fails, fix the issues and try again:
+```bash
+make lint           # Run full linter suite
+make quick          # Quick format + vet check
+golangci-lint run   # Run golangci-lint directly
+```
 
 ### 5. Push and Create Pull Request
 
