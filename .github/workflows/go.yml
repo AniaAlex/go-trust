@@ -157,22 +157,21 @@ jobs:
         git commit -m "chore: Update badges [skip ci]" || echo "Nothing to commit"
         git push origin badges
 
-  # Disabled: golangci-lint was built with Go 1.24, incompatible with 1.25
-  # lint:
-  #   name: Lint
-  #   runs-on: ubuntu-latest
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
 
-  #   steps:
-  #   - uses: actions/checkout@v3
+    steps:
+    - uses: actions/checkout@v3
 
-  #   - name: Set up Go
-  #     uses: actions/setup-go@v4
-  #     with:
-  #       go-version-file: 'go.mod'
-  #       cache: true
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: 'go.mod'
+        cache: true
 
-  #   - name: golangci-lint
-  #     uses: golangci/golangci-lint-action@v3
-  #     with:
-  #       version: latest
-  #       args: --timeout=5m
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v7
+      with:
+        version: v2.10.0
+        args: --timeout=5m --tests=false
