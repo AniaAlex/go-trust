@@ -439,7 +439,7 @@ func decodeMultibaseKey(multibaseKey string) (string, map[string]interface{}, er
 
 	// First byte(s) are the multicodec identifier
 	multicodec := keyBytes[0]
-	publicKeyBytes := keyBytes[2:] // Skip multicodec prefix (2 bytes for most cases)
+	var publicKeyBytes []byte
 
 	switch multicodec {
 	case multicodecEd25519Pub:

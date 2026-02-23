@@ -634,11 +634,11 @@ func (r *OIDFedRegistry) buildTrustMetadata(chain oidfed.TrustChain, entityID st
 	}
 
 	// Include issued_at and expires_at
-	if !leafStatement.IssuedAt.Time.IsZero() {
-		trustMeta["iat"] = leafStatement.IssuedAt.Time.Unix()
+	if !leafStatement.IssuedAt.IsZero() {
+		trustMeta["iat"] = leafStatement.IssuedAt.Unix()
 	}
-	if !leafStatement.ExpiresAt.Time.IsZero() {
-		trustMeta["exp"] = leafStatement.ExpiresAt.Time.Unix()
+	if !leafStatement.ExpiresAt.IsZero() {
+		trustMeta["exp"] = leafStatement.ExpiresAt.Unix()
 	}
 
 	// Include cache info if relevant
@@ -648,7 +648,7 @@ func (r *OIDFedRegistry) buildTrustMetadata(chain oidfed.TrustChain, entityID st
 	}
 
 	// Include JWKS keys summary if available
-	if leafStatement.JWKS.Set != nil && leafStatement.JWKS.Set.Len() > 0 {
+	if leafStatement.JWKS.Set != nil && leafStatement.JWKS.Len() > 0 {
 		trustMeta["jwks"] = r.jwksToMap(leafStatement.JWKS)
 	}
 
@@ -678,11 +678,11 @@ func (r *OIDFedRegistry) buildDetailedTrustChain(chain oidfed.TrustChain, includ
 			"iss": stmt.Issuer,
 			"sub": stmt.Subject,
 		}
-		if !stmt.IssuedAt.Time.IsZero() {
-			stmtMap["iat"] = stmt.IssuedAt.Time.Unix()
+		if !stmt.IssuedAt.IsZero() {
+			stmtMap["iat"] = stmt.IssuedAt.Unix()
 		}
-		if !stmt.ExpiresAt.Time.IsZero() {
-			stmtMap["exp"] = stmt.ExpiresAt.Time.Unix()
+		if !stmt.ExpiresAt.IsZero() {
+			stmtMap["exp"] = stmt.ExpiresAt.Unix()
 		}
 
 		// Include trust marks if present
@@ -815,7 +815,7 @@ func (r *OIDFedRegistry) extractMetadata(chain oidfed.TrustChain) map[string]int
 	metadata["subject"] = leaf.Subject
 
 	// Add expiration time
-	metadata["expires_at"] = leaf.ExpiresAt.Time.Format(time.RFC3339)
+	metadata["expires_at"] = leaf.ExpiresAt.Format(time.RFC3339)
 
 	return metadata
 }
@@ -830,8 +830,8 @@ func (r *OIDFedRegistry) extractCertificates(chain oidfed.TrustChain) []*x509.Ce
 		}
 
 		// Iterate through keys in the JWKS
-		for i := 0; i < stmt.JWKS.Set.Len(); i++ {
-			key, ok := stmt.JWKS.Set.Key(i)
+		for i := 0; i < stmt.JWKS.Len(); i++ {
+			key, ok := stmt.JWKS.Key(i)
 			if !ok {
 				continue
 			}
@@ -904,15 +904,15 @@ func (r *OIDFedRegistry) chainToTrustMetadata(chain oidfed.TrustChain, metadata 
 	}
 
 	// Include issued_at and expires_at
-	if !leafStatement.IssuedAt.Time.IsZero() {
-		trustMeta["iat"] = leafStatement.IssuedAt.Time.Unix()
+	if !leafStatement.IssuedAt.IsZero() {
+		trustMeta["iat"] = leafStatement.IssuedAt.Unix()
 	}
-	if !leafStatement.ExpiresAt.Time.IsZero() {
-		trustMeta["exp"] = leafStatement.ExpiresAt.Time.Unix()
+	if !leafStatement.ExpiresAt.IsZero() {
+		trustMeta["exp"] = leafStatement.ExpiresAt.Unix()
 	}
 
 	// Include JWKS keys summary if available
-	if leafStatement.JWKS.Set != nil && leafStatement.JWKS.Set.Len() > 0 {
+	if leafStatement.JWKS.Set != nil && leafStatement.JWKS.Len() > 0 {
 		trustMeta["jwks"] = r.jwksToMap(leafStatement.JWKS)
 	}
 
@@ -927,11 +927,11 @@ func (r *OIDFedRegistry) buildTrustChainArray(chain oidfed.TrustChain) []map[str
 			"iss": stmt.Issuer,
 			"sub": stmt.Subject,
 		}
-		if !stmt.IssuedAt.Time.IsZero() {
-			stmtMap["iat"] = stmt.IssuedAt.Time.Unix()
+		if !stmt.IssuedAt.IsZero() {
+			stmtMap["iat"] = stmt.IssuedAt.Unix()
 		}
-		if !stmt.ExpiresAt.Time.IsZero() {
-			stmtMap["exp"] = stmt.ExpiresAt.Time.Unix()
+		if !stmt.ExpiresAt.IsZero() {
+			stmtMap["exp"] = stmt.ExpiresAt.Unix()
 		}
 		chainArray[i] = stmtMap
 	}
@@ -945,8 +945,8 @@ func (r *OIDFedRegistry) jwksToMap(jwks oidfedjwx.JWKS) map[string]interface{} {
 	}
 
 	keys := make([]map[string]interface{}, 0)
-	for i := 0; i < jwks.Set.Len(); i++ {
-		key, ok := jwks.Set.Key(i)
+	for i := 0; i < jwks.Len(); i++ {
+		key, ok := jwks.Key(i)
 		if !ok {
 			continue
 		}

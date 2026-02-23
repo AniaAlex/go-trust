@@ -14,7 +14,7 @@ import (
 )
 
 // parseX5C extracts and parses x5c certificates from a map[string]interface{}.
-// DEPRECATED: Use parseX5CFromArray or parseX5CFromJWK for AuthZEN Trust Registry Profile compliance.
+// Deprecated: Use parseX5CFromArray or parseX5CFromJWK for AuthZEN Trust Registry Profile compliance.
 func parseX5C(props map[string]interface{}) ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
 	if props == nil {

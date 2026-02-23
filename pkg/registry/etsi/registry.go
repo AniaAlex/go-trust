@@ -556,9 +556,7 @@ func (r *TSLRegistry) Info() registry.RegistryInfo {
 	}
 	// Add source files as trust anchors if no TSL territories
 	if len(trustAnchors) == 0 {
-		for _, f := range r.sourceFiles {
-			trustAnchors = append(trustAnchors, f)
-		}
+		trustAnchors = append(trustAnchors, r.sourceFiles...)
 	}
 
 	return registry.RegistryInfo{

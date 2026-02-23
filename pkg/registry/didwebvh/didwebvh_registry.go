@@ -396,7 +396,7 @@ func (r *DIDWebVHRegistry) resolveDID(ctx context.Context, did string) (*DIDDocu
 	if err != nil {
 		return nil, nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // Body close error is not actionable
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
@@ -878,10 +878,7 @@ func (r *DIDWebVHRegistry) findPublicKey(verificationMethod string, params *DIDP
 // Multikey format for Ed25519: z6Mk... (multibase base58btc + multicodec prefix 0xed01)
 func (r *DIDWebVHRegistry) decodeMultikey(multikey string) (ed25519.PublicKey, error) {
 	// Remove did:key: prefix if present
-	key := multikey
-	if strings.HasPrefix(key, "did:key:") {
-		key = strings.TrimPrefix(key, "did:key:")
-	}
+	key := strings.TrimPrefix(multikey, "did:key:")
 
 	// Decode multibase
 	_, data, err := multibase.Decode(key)

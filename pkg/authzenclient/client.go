@@ -149,7 +149,7 @@ func Discover(ctx context.Context, baseURL string, opts ...Option) (*Client, err
 	if err != nil {
 		return nil, fmt.Errorf("discovery request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // Body close error is not actionable
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -213,7 +213,7 @@ func (c *Client) doEvaluate(ctx context.Context, req *authzen.EvaluationRequest)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	defer httpResp.Body.Close()
+	defer httpResp.Body.Close() //nolint:errcheck // Body close error is not actionable
 
 	// Read response body
 	respBody, err := io.ReadAll(httpResp.Body)

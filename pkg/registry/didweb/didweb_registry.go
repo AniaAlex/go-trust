@@ -305,7 +305,7 @@ func (r *DIDWebRegistry) resolveDID(ctx context.Context, did string) (*DIDDocume
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // Body close error is not actionable
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {

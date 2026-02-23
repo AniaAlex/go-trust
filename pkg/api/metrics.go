@@ -157,7 +157,7 @@ func (m *Metrics) MetricsMiddleware() gin.HandlerFunc {
 }
 
 // RecordPipelineExecution records metrics for a pipeline execution
-// DEPRECATED: Use RecordRefreshExecution instead
+// Deprecated: Use RecordRefreshExecution instead
 func (m *Metrics) RecordPipelineExecution(duration time.Duration, tslCount int, err error) {
 	m.PipelineExecutionDuration.Observe(duration.Seconds())
 	m.PipelineExecutionTotal.Inc()

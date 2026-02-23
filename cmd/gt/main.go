@@ -162,10 +162,7 @@ func main() {
 
 		if *etsiTSLFiles != "" {
 			// Split comma-separated file list
-			files := []string{}
-			for _, f := range splitCSV(*etsiTSLFiles) {
-				files = append(files, f)
-			}
+			files := splitCSV(*etsiTSLFiles)
 			config.TSLFiles = files
 			logger.Info("Loading ETSI TSL files",
 				logging.F("count", len(files)))
