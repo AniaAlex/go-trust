@@ -572,6 +572,10 @@ func TestMergeParameters(t *testing.T) {
 // TestPublicMediatorResolution tests resolution of the public mediator DID.
 // This test requires network access and is skipped if the mediator is unavailable.
 func TestPublicMediatorResolution(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network-dependent test in short mode")
+	}
+
 	// Public mediator DID
 	mediatorDID := "did:webvh:QmetnhxzJXTJ9pyXR1BbZ2h6DomY6SB1ZbzFPrjYyaEq9V:fpp.storm.ws:public-mediator"
 
