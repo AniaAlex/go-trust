@@ -208,6 +208,41 @@ Resolves and validates DID Web identifiers per W3C DID specification.
 
 **Supported resource types:** `key`, `jwk`
 
+#### DID Web VH Registry
+
+Resolves and validates DID Web VH (Verifiable History) identifiers with cryptographic integrity verification.
+
+**Features:**
+- Full DID:web:vh resolution per spec
+- Cryptographic chain verification
+- Version history traversal
+- Pre-rotation key support
+
+**Supported resource types:** `did_document`, `jwk`, `verification_method`
+
+### Static Trust Registries
+
+The `pkg/registry/static` package provides simple TrustRegistry implementations for testing, development, and basic use cases:
+
+| Registry | Description | Use Case |
+|----------|-------------|----------|
+| `AlwaysTrustedRegistry` | Always returns `decision=true` | Testing, development, trust-all scenarios |
+| `NeverTrustedRegistry` | Always returns `decision=false` | Testing trust rejection, deny-all scenarios |
+| `SystemCertPoolRegistry` | Validates X509 against OS CA bundle | Simple TLS trust without ETSI TSL |
+
+```go
+import "github.com/sirosfoundation/go-trust/pkg/registry/static"
+
+// Accept all trust requests
+registry := static.NewAlwaysTrustedRegistry()
+
+// Reject all trust requests  
+registry := static.NewNeverTrustedRegistry()
+
+// Validate against system CA bundle
+registry := static.NewSystemCertPoolRegistry()
+```
+
 ## Deployment
 
 ### Docker
@@ -324,11 +359,16 @@ The `testserver` package provides an embedded test server for integration testin
 import (
     "testing"
     "github.com/sirosfoundation/go-trust/pkg/testserver"
+    "github.com/sirosfoundation/go-trust/pkg/registry/static"
 )
 
 func TestMyApplication(t *testing.T) {
     // Create a test server that accepts all trust requests
     srv := testserver.New(testserver.WithAcceptAll())
+    defer srv.Close()
+
+    // Or use static registries for more control
+    srv := testserver.New(testserver.WithRegistry(static.NewAlwaysTrustedRegistry()))
     defer srv.Close()
 
     // Use srv.URL() to get the server address
@@ -342,8 +382,22 @@ func TestMyApplication(t *testing.T) {
 |--------|-------------|
 | `WithAcceptAll()` | Accept all trust requests |
 | `WithRejectAll()` | Reject all trust requests |
+| `WithRegistry(r)` | Use a specific TrustRegistry implementation |
 | `WithMockRegistry(name, decision, types)` | Add a mock registry |
 | `WithDecisionFunc(fn)` | Dynamic trust decisions |
+
+### Using Static Registries in Tests
+
+```go
+// Test with always-trusted registry
+srv := testserver.New(testserver.WithRegistry(static.NewAlwaysTrustedRegistry()))
+
+// Test with never-trusted registry  
+srv := testserver.New(testserver.WithRegistry(static.NewNeverTrustedRegistry()))
+
+// Test with system CA validation
+srv := testserver.New(testserver.WithRegistry(static.NewSystemCertPoolRegistry()))
+```
 
 ## Development
 
@@ -372,9 +426,11 @@ go-trust/
 │   ├── api/        # HTTP API implementation
 │   ├── authzen/    # AuthZEN protocol types
 │   ├── registry/   # Trust registry interface and manager
-│   │   ├── etsi/   # ETSI TSL registry
-│   │   ├── oidfed/ # OpenID Federation registry
-│   │   └── didweb/ # DID Web registry
+│   │   ├── etsi/     # ETSI TSL registry
+│   │   ├── oidfed/   # OpenID Federation registry
+│   │   ├── didweb/   # DID Web registry
+│   │   ├── didwebvh/ # DID Web VH registry
+│   │   └── static/   # Static registries (always/never/system)
 │   ├── logging/    # Structured logging
 │   └── testserver/ # Embedded test server
 ├── example/        # Example configurations
