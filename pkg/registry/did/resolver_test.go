@@ -372,3 +372,190 @@ func TestJWKsMatch(t *testing.T) {
 		})
 	}
 }
+
+// TestDecodeMultibaseKey tests multibase key decoding
+func TestDecodeMultibaseKey(t *testing.T) {
+	tests := []struct {
+		name         string
+		multibaseKey string
+		expectType   string
+		expectError  bool
+		errorMsg     string
+	}{
+		{
+			name:        "key too short",
+			multibaseKey: "z",
+			expectError: true,
+			errorMsg:    "multibase key too short",
+		},
+		{
+			name:        "empty string",
+			multibaseKey: "",
+			expectError: true,
+			errorMsg:    "multibase key too short",
+		},
+		{
+			name:        "unsupported encoding",
+			multibaseKey: "m0123456789", // 'm' is base64 but not supported
+			expectError: true,
+			errorMsg:    "unsupported multibase encoding",
+		},
+		{
+			name:         "valid Ed25519 key",
+			multibaseKey: "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+			expectType:   "Ed25519VerificationKey2020",
+			expectError:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyType, jwk, err := decodeMultibaseKey(tt.multibaseKey)
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expectType, keyType)
+				assert.NotNil(t, jwk)
+			}
+		})
+	}
+}
+
+// TestDecompressSecp256k1 tests secp256k1 key decompression
+func TestDecompressSecp256k1(t *testing.T) {
+	tests := []struct {
+		name        string
+		compressed  []byte
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "invalid length - too short",
+			compressed:  []byte{0x02, 0x01, 0x02},
+			expectError: true,
+			errorMsg:    "invalid compressed key length",
+		},
+		{
+			name:        "invalid length - too long",
+			compressed:  make([]byte, 34),
+			expectError: true,
+			errorMsg:    "invalid compressed key length",
+		},
+		{
+			name:        "valid even y (0x02 prefix)",
+			compressed:  append([]byte{0x02}, make([]byte, 32)...),
+			expectError: false,
+		},
+		{
+			name:        "valid odd y (0x03 prefix)",
+			compressed:  append([]byte{0x03}, make([]byte, 32)...),
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			x, y, err := decompressSecp256k1(tt.compressed)
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, x)
+				assert.NotNil(t, y)
+				assert.Len(t, x, 32)
+				assert.Len(t, y, 32)
+			}
+		})
+	}
+}
+
+// TestDecompressP256 tests P-256 key decompression
+func TestDecompressP256(t *testing.T) {
+	tests := []struct {
+		name        string
+		compressed  []byte
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "invalid length - too short",
+			compressed:  []byte{0x02, 0x01, 0x02},
+			expectError: true,
+			errorMsg:    "invalid compressed key length",
+		},
+		{
+			name:        "invalid key - wrong prefix",
+			compressed:  append([]byte{0x00}, make([]byte, 32)...),
+			expectError: true,
+			errorMsg:    "failed to decompress P-256 key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			x, y, err := decompressP256(tt.compressed)
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, x)
+				assert.NotNil(t, y)
+			}
+		})
+	}
+}
+
+// TestDecompressP384 tests P-384 key decompression
+func TestDecompressP384(t *testing.T) {
+	tests := []struct {
+		name        string
+		compressed  []byte
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "invalid length - too short",
+			compressed:  []byte{0x02, 0x01, 0x02},
+			expectError: true,
+			errorMsg:    "invalid compressed key length",
+		},
+		{
+			name:        "invalid length - wrong size",
+			compressed:  make([]byte, 33), // P-384 needs 49 bytes
+			expectError: true,
+			errorMsg:    "invalid compressed key length",
+		},
+		{
+			name:        "invalid key - wrong prefix",
+			compressed:  append([]byte{0x00}, make([]byte, 48)...),
+			expectError: true,
+			errorMsg:    "failed to decompress P-384 key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			x, y, err := decompressP384(tt.compressed)
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, x)
+				assert.NotNil(t, y)
+			}
+		})
+	}
+}

@@ -2,10 +2,15 @@ package oidfed
 
 import (
 	"context"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"math/big"
 	"testing"
 	"time"
 
+	oidfed "github.com/go-oidfed/lib"
 	oidfedjwx "github.com/go-oidfed/lib/jwx"
+	"github.com/go-oidfed/lib/unixtime"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
@@ -1371,5 +1376,808 @@ func TestOIDFedRegistry_RefreshClearsCache(t *testing.T) {
 	size, _, _ = registry.cache.Stats()
 	if size != 0 {
 		t.Errorf("Cache size after refresh = %d, want 0", size)
+	}
+}
+
+// TestOIDFedRegistry_MergeStringSlices tests string slice merging with deduplication.
+func TestOIDFedRegistry_MergeStringSlices(t *testing.T) {
+	tests := []struct {
+		name     string
+		a        []string
+		b        []string
+		expected []string
+	}{
+		{
+			name:     "empty slices",
+			a:        []string{},
+			b:        []string{},
+			expected: []string{},
+		},
+		{
+			name:     "first empty",
+			a:        []string{},
+			b:        []string{"one", "two"},
+			expected: []string{"one", "two"},
+		},
+		{
+			name:     "second empty",
+			a:        []string{"one", "two"},
+			b:        []string{},
+			expected: []string{"one", "two"},
+		},
+		{
+			name:     "no overlap",
+			a:        []string{"one", "two"},
+			b:        []string{"three", "four"},
+			expected: []string{"one", "two", "three", "four"},
+		},
+		{
+			name:     "with duplicates",
+			a:        []string{"one", "two"},
+			b:        []string{"two", "three"},
+			expected: []string{"one", "two", "three"},
+		},
+		{
+			name:     "all duplicates",
+			a:        []string{"one", "two"},
+			b:        []string{"one", "two"},
+			expected: []string{"one", "two"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mergeStringSlices(tt.a, tt.b)
+			if len(result) != len(tt.expected) {
+				t.Errorf("mergeStringSlices() length = %d, want %d", len(result), len(tt.expected))
+			}
+			// Check all expected elements are present
+			resultMap := make(map[string]bool)
+			for _, s := range result {
+				resultMap[s] = true
+			}
+			for _, s := range tt.expected {
+				if !resultMap[s] {
+					t.Errorf("mergeStringSlices() missing expected element: %s", s)
+				}
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_GetTrustAnchorID tests the getTrustAnchorID helper.
+func TestOIDFedRegistry_GetTrustAnchorID(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{
+			{EntityID: "https://ta.example.com"},
+		},
+	})
+
+	tests := []struct {
+		name     string
+		chain    oidfed.TrustChain
+		expected string
+	}{
+		{
+			name:     "empty chain",
+			chain:    oidfed.TrustChain{},
+			expected: "",
+		},
+		{
+			name: "single element chain",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://ta.example.com",
+						Subject: "https://ta.example.com",
+					},
+				},
+			},
+			expected: "https://ta.example.com",
+		},
+		{
+			name: "multi-element chain",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+					},
+				},
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://intermediate.example.com",
+						Subject: "https://entity.example.com",
+					},
+				},
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://ta.example.com",
+						Subject: "https://ta.example.com",
+					},
+				},
+			},
+			expected: "https://ta.example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := registry.getTrustAnchorID(tt.chain)
+			if result != tt.expected {
+				t.Errorf("getTrustAnchorID() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_ExtractMetadata tests the extractMetadata helper.
+func TestOIDFedRegistry_ExtractMetadata(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{
+			{EntityID: "https://ta.example.com"},
+		},
+	})
+
+	tests := []struct {
+		name             string
+		chain            oidfed.TrustChain
+		expectIssuer     string
+		expectSubject    string
+		expectTrustMarks bool
+	}{
+		{
+			name:         "empty chain",
+			chain:        oidfed.TrustChain{},
+			expectIssuer: "",
+		},
+		{
+			name: "chain without trust marks",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+					},
+				},
+			},
+			expectIssuer:     "https://entity.example.com",
+			expectSubject:    "https://entity.example.com",
+			expectTrustMarks: false,
+		},
+		{
+			name: "chain with trust marks",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+						TrustMarks: oidfed.TrustMarkInfos{
+							{TrustMarkType: "https://example.com/tm1"},
+							{TrustMarkType: "https://example.com/tm2"},
+						},
+					},
+				},
+			},
+			expectIssuer:     "https://entity.example.com",
+			expectSubject:    "https://entity.example.com",
+			expectTrustMarks: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := registry.extractMetadata(tt.chain)
+			if len(tt.chain) == 0 {
+				if len(result) != 0 {
+					t.Errorf("extractMetadata() for empty chain should return empty map")
+				}
+				return
+			}
+			if result["issuer"] != tt.expectIssuer {
+				t.Errorf("extractMetadata()['issuer'] = %v, want %v", result["issuer"], tt.expectIssuer)
+			}
+			if result["subject"] != tt.expectSubject {
+				t.Errorf("extractMetadata()['subject'] = %v, want %v", result["subject"], tt.expectSubject)
+			}
+			if tt.expectTrustMarks {
+				if result["trust_marks"] == nil {
+					t.Errorf("extractMetadata() should include trust_marks")
+				}
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_CheckTrustMarks tests the checkTrustMarks helper.
+func TestOIDFedRegistry_CheckTrustMarks(t *testing.T) {
+	tests := []struct {
+		name               string
+		requiredTrustMarks []string
+		chain              oidfed.TrustChain
+		expected           bool
+	}{
+		{
+			name:               "no required marks - empty chain",
+			requiredTrustMarks: []string{},
+			chain:              oidfed.TrustChain{},
+			expected:           true,
+		},
+		{
+			name:               "no required marks - with chain",
+			requiredTrustMarks: []string{},
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:               "required marks - empty chain",
+			requiredTrustMarks: []string{"https://example.com/tm1"},
+			chain:              oidfed.TrustChain{},
+			expected:           false,
+		},
+		{
+			name:               "required marks - no trust marks in chain",
+			requiredTrustMarks: []string{"https://example.com/tm1"},
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name:               "required marks - all present",
+			requiredTrustMarks: []string{"https://example.com/tm1"},
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+						TrustMarks: oidfed.TrustMarkInfos{
+							{TrustMarkType: "https://example.com/tm1"},
+							{TrustMarkType: "https://example.com/tm2"},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:               "required marks - missing one",
+			requiredTrustMarks: []string{"https://example.com/tm1", "https://example.com/tm3"},
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+						TrustMarks: oidfed.TrustMarkInfos{
+							{TrustMarkType: "https://example.com/tm1"},
+							{TrustMarkType: "https://example.com/tm2"},
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry, _ := NewOIDFedRegistry(Config{
+				TrustAnchors:       []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+				RequiredTrustMarks: tt.requiredTrustMarks,
+			})
+			result := registry.checkTrustMarks(tt.chain)
+			if result != tt.expected {
+				t.Errorf("checkTrustMarks() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_CheckTrustMarksWithList tests the checkTrustMarksWithList helper.
+func TestOIDFedRegistry_CheckTrustMarksWithList(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	tests := []struct {
+		name          string
+		chain         oidfed.TrustChain
+		requiredMarks []string
+		expected      bool
+	}{
+		{
+			name:          "no required marks",
+			chain:         oidfed.TrustChain{},
+			requiredMarks: []string{},
+			expected:      true,
+		},
+		{
+			name:          "required marks - empty chain",
+			chain:         oidfed.TrustChain{},
+			requiredMarks: []string{"https://example.com/tm1"},
+			expected:      false,
+		},
+		{
+			name: "required marks - all present",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+						TrustMarks: oidfed.TrustMarkInfos{
+							{TrustMarkType: "https://example.com/tm1"},
+						},
+					},
+				},
+			},
+			requiredMarks: []string{"https://example.com/tm1"},
+			expected:      true,
+		},
+		{
+			name: "required marks - missing",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:     "https://entity.example.com",
+						Subject:    "https://entity.example.com",
+						TrustMarks: oidfed.TrustMarkInfos{},
+					},
+				},
+			},
+			requiredMarks: []string{"https://example.com/tm1"},
+			expected:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := registry.checkTrustMarksWithList(tt.chain, tt.requiredMarks)
+			if result != tt.expected {
+				t.Errorf("checkTrustMarksWithList() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_GetPresentTrustMarks tests the getPresentTrustMarks helper.
+func TestOIDFedRegistry_GetPresentTrustMarks(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	tests := []struct {
+		name     string
+		chain    oidfed.TrustChain
+		expected []string
+	}{
+		{
+			name:     "empty chain",
+			chain:    oidfed.TrustChain{},
+			expected: nil,
+		},
+		{
+			name: "no trust marks",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+					},
+				},
+			},
+			expected: nil,
+		},
+		{
+			name: "with trust marks",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+						TrustMarks: oidfed.TrustMarkInfos{
+							{TrustMarkType: "https://example.com/tm1"},
+							{TrustMarkType: "https://example.com/tm2"},
+						},
+					},
+				},
+			},
+			expected: []string{"https://example.com/tm1", "https://example.com/tm2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := registry.getPresentTrustMarks(tt.chain)
+			if len(result) != len(tt.expected) {
+				t.Errorf("getPresentTrustMarks() length = %d, want %d", len(result), len(tt.expected))
+				return
+			}
+			for i, mark := range result {
+				if mark != tt.expected[i] {
+					t.Errorf("getPresentTrustMarks()[%d] = %v, want %v", i, mark, tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_BuildTrustChainArray tests the buildTrustChainArray helper.
+func TestOIDFedRegistry_BuildTrustChainArray(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	now := time.Now()
+
+	tests := []struct {
+		name     string
+		chain    oidfed.TrustChain
+		expected int // number of entries
+	}{
+		{
+			name:     "empty chain",
+			chain:    oidfed.TrustChain{},
+			expected: 0,
+		},
+		{
+			name: "single element",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:    "https://ta.example.com",
+						Subject:   "https://ta.example.com",
+						IssuedAt:  unixtime.Unixtime{Time: now},
+						ExpiresAt: unixtime.Unixtime{Time: now.Add(time.Hour)},
+					},
+				},
+			},
+			expected: 1,
+		},
+		{
+			name: "multi-element",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://entity.example.com",
+						Subject: "https://entity.example.com",
+					},
+				},
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://ta.example.com",
+						Subject: "https://ta.example.com",
+					},
+				},
+			},
+			expected: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := registry.buildTrustChainArray(tt.chain)
+			if len(result) != tt.expected {
+				t.Errorf("buildTrustChainArray() length = %d, want %d", len(result), tt.expected)
+			}
+			for i, entry := range result {
+				if entry["iss"] == nil || entry["sub"] == nil {
+					t.Errorf("buildTrustChainArray()[%d] missing iss or sub", i)
+				}
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_BuildDetailedTrustChain tests the buildDetailedTrustChain helper.
+func TestOIDFedRegistry_BuildDetailedTrustChain(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	now := time.Now()
+
+	chain := oidfed.TrustChain{
+		&oidfed.EntityStatement{
+			EntityStatementPayload: oidfed.EntityStatementPayload{
+				Issuer:    "https://entity.example.com",
+				Subject:   "https://entity.example.com",
+				IssuedAt:  unixtime.Unixtime{Time: now},
+				ExpiresAt: unixtime.Unixtime{Time: now.Add(time.Hour)},
+				TrustMarks: oidfed.TrustMarkInfos{
+					{TrustMarkType: "https://example.com/tm1"},
+				},
+			},
+		},
+	}
+
+	result := registry.buildDetailedTrustChain(chain, false)
+	if len(result) != 1 {
+		t.Fatalf("buildDetailedTrustChain() length = %d, want 1", len(result))
+	}
+
+	entry := result[0]
+	if entry["iss"] != "https://entity.example.com" {
+		t.Errorf("buildDetailedTrustChain()[0]['iss'] = %v, want https://entity.example.com", entry["iss"])
+	}
+	if entry["trust_marks"] == nil {
+		t.Error("buildDetailedTrustChain()[0] should include trust_marks")
+	}
+}
+
+// TestOIDFedRegistry_ChainToTrustMetadata tests the chainToTrustMetadata helper.
+func TestOIDFedRegistry_ChainToTrustMetadata(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	tests := []struct {
+		name           string
+		chain          oidfed.TrustChain
+		metadata       map[string]interface{}
+		expectNil      bool
+		expectIss      string
+		expectSub      string
+		expectAnchor   string
+	}{
+		{
+			name:      "empty chain",
+			chain:     oidfed.TrustChain{},
+			metadata:  nil,
+			expectNil: true,
+		},
+		{
+			name: "single element",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:  "https://ta.example.com",
+						Subject: "https://ta.example.com",
+					},
+				},
+			},
+			metadata:     map[string]interface{}{"key": "value"},
+			expectNil:    false,
+			expectIss:    "https://ta.example.com",
+			expectSub:    "https://ta.example.com",
+			expectAnchor: "https://ta.example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := registry.chainToTrustMetadata(tt.chain, tt.metadata)
+			if tt.expectNil {
+				if result != nil {
+					t.Errorf("chainToTrustMetadata() should return nil for empty chain")
+				}
+				return
+			}
+			if result == nil {
+				t.Fatalf("chainToTrustMetadata() returned nil, want non-nil")
+			}
+			if result["iss"] != tt.expectIss {
+				t.Errorf("chainToTrustMetadata()['iss'] = %v, want %v", result["iss"], tt.expectIss)
+			}
+			if result["sub"] != tt.expectSub {
+				t.Errorf("chainToTrustMetadata()['sub'] = %v, want %v", result["sub"], tt.expectSub)
+			}
+			if result["trust_anchor"] != tt.expectAnchor {
+				t.Errorf("chainToTrustMetadata()['trust_anchor'] = %v, want %v", result["trust_anchor"], tt.expectAnchor)
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_BuildResolutionOnlyResponse tests the buildResolutionOnlyResponse helper.
+func TestOIDFedRegistry_BuildResolutionOnlyResponse(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	chain := oidfed.TrustChain{
+		&oidfed.EntityStatement{
+			EntityStatementPayload: oidfed.EntityStatementPayload{
+				Issuer:  "https://entity.example.com",
+				Subject: "https://entity.example.com",
+			},
+		},
+		&oidfed.EntityStatement{
+			EntityStatementPayload: oidfed.EntityStatementPayload{
+				Issuer:  "https://ta.example.com",
+				Subject: "https://ta.example.com",
+			},
+		},
+	}
+
+	metadata := map[string]interface{}{"key": "value"}
+	result := registry.buildResolutionOnlyResponse("https://entity.example.com", chain, metadata)
+
+	if !result.Decision {
+		t.Error("buildResolutionOnlyResponse() Decision should be true")
+	}
+	if result.Context == nil {
+		t.Fatal("buildResolutionOnlyResponse() Context should not be nil")
+	}
+	if result.Context.Reason == nil {
+		t.Fatal("buildResolutionOnlyResponse() Reason should not be nil")
+	}
+	if result.Context.Reason["resolution_only"] != true {
+		t.Error("buildResolutionOnlyResponse() Reason['resolution_only'] should be true")
+	}
+	if result.Context.Reason["entity_id"] != "https://entity.example.com" {
+		t.Errorf("buildResolutionOnlyResponse() Reason['entity_id'] = %v, want https://entity.example.com", result.Context.Reason["entity_id"])
+	}
+}
+
+// TestOIDFedRegistry_BuildTrustMetadata tests the buildTrustMetadata helper.
+func TestOIDFedRegistry_BuildTrustMetadata(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	now := time.Now()
+
+	tests := []struct {
+		name              string
+		chain             oidfed.TrustChain
+		includeTrustChain bool
+		includeCerts      bool
+		expectNil         bool
+	}{
+		{
+			name:      "empty chain",
+			chain:     oidfed.TrustChain{},
+			expectNil: true,
+		},
+		{
+			name: "basic chain",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:    "https://entity.example.com",
+						Subject:   "https://entity.example.com",
+						IssuedAt:  unixtime.Unixtime{Time: now},
+						ExpiresAt: unixtime.Unixtime{Time: now.Add(time.Hour)},
+					},
+				},
+			},
+			includeTrustChain: false,
+			includeCerts:      false,
+			expectNil:         false,
+		},
+		{
+			name: "with trust chain",
+			chain: oidfed.TrustChain{
+				&oidfed.EntityStatement{
+					EntityStatementPayload: oidfed.EntityStatementPayload{
+						Issuer:    "https://entity.example.com",
+						Subject:   "https://entity.example.com",
+						IssuedAt:  unixtime.Unixtime{Time: now},
+						ExpiresAt: unixtime.Unixtime{Time: now.Add(time.Hour)},
+					},
+				},
+			},
+			includeTrustChain: true,
+			includeCerts:      false,
+			expectNil:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := registry.buildTrustMetadata(tt.chain, "https://entity.example.com", tt.includeTrustChain, tt.includeCerts, now, nil)
+			if tt.expectNil {
+				if result != nil {
+					t.Error("buildTrustMetadata() should return nil for empty chain")
+				}
+				return
+			}
+			if result == nil {
+				t.Fatal("buildTrustMetadata() returned nil, want non-nil")
+			}
+			if result["entity_id"] != "https://entity.example.com" {
+				t.Errorf("buildTrustMetadata()['entity_id'] = %v, want https://entity.example.com", result["entity_id"])
+			}
+			if tt.includeTrustChain {
+				if result["trust_chain"] == nil {
+					t.Error("buildTrustMetadata() should include trust_chain when requested")
+				}
+			} else {
+				if result["trust_chain_length"] == nil {
+					t.Error("buildTrustMetadata() should include trust_chain_length when trust_chain not requested")
+				}
+			}
+		})
+	}
+}
+
+// TestOIDFedRegistry_JwksToMap tests the jwksToMap helper.
+func TestOIDFedRegistry_JwksToMap(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	// Test with nil JWKS
+	nilJWKS := oidfedjwx.JWKS{}
+	result := registry.jwksToMap(nilJWKS)
+	if result != nil {
+		t.Errorf("jwksToMap(nil) should return nil, got %v", result)
+	}
+}
+
+// TestOIDFedRegistry_CertificatesToArray tests the certificatesToArray helper.
+func TestOIDFedRegistry_CertificatesToArray(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	// Test with empty certs
+	result := registry.certificatesToArray([]*x509.Certificate{})
+	if len(result) != 0 {
+		t.Errorf("certificatesToArray([]) should return empty array, got %d elements", len(result))
+	}
+
+	// Test with a real certificate
+	cert := &x509.Certificate{
+		Subject: pkix.Name{
+			CommonName: "Test Entity",
+		},
+		Issuer: pkix.Name{
+			CommonName: "Test CA",
+		},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		SerialNumber: big.NewInt(12345),
+		DNSNames:     []string{"example.com", "www.example.com"},
+	}
+
+	result = registry.certificatesToArray([]*x509.Certificate{cert})
+	if len(result) != 1 {
+		t.Fatalf("certificatesToArray() should return 1 element, got %d", len(result))
+	}
+	if result[0]["serial"] == nil {
+		t.Error("certificatesToArray() should include serial")
+	}
+	if result[0]["dns_names"] == nil {
+		t.Error("certificatesToArray() should include dns_names")
+	}
+}
+
+// TestOIDFedRegistry_ExtractCertificates tests the extractCertificates helper.
+func TestOIDFedRegistry_ExtractCertificates(t *testing.T) {
+	registry, _ := NewOIDFedRegistry(Config{
+		TrustAnchors: []TrustAnchorConfig{{EntityID: "https://ta.example.com"}},
+	})
+
+	// Test with empty chain
+	certs := registry.extractCertificates(oidfed.TrustChain{})
+	if len(certs) != 0 {
+		t.Errorf("extractCertificates([]) should return empty, got %d", len(certs))
+	}
+
+	// Test with chain without JWKS
+	chain := oidfed.TrustChain{
+		&oidfed.EntityStatement{
+			EntityStatementPayload: oidfed.EntityStatementPayload{
+				Issuer:  "https://entity.example.com",
+				Subject: "https://entity.example.com",
+			},
+		},
+	}
+	certs = registry.extractCertificates(chain)
+	if len(certs) != 0 {
+		t.Errorf("extractCertificates() with no JWKS should return empty, got %d", len(certs))
 	}
 }
