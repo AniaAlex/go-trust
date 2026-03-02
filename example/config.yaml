@@ -3,12 +3,13 @@
 # This file documents all available configuration options.
 # Use with: gt --config config.yaml
 #
-# NOTE: The current command-line interface only supports a subset of these options.
-# Full config file support is planned. Currently supported via CLI:
-#   --host, --port, --external-url, --etsi-cert-bundle, --etsi-tsl-files
-#   --log-level, --log-format
+# Configuration file supports:
+#   - server: host, port, external_url
+#   - logging: level, format
+#   - registries: etsi, whitelist, always_trusted, never_trusted
 #
-# This file serves as both documentation and a template for future config support.
+# CLI flags override config file values when both are specified.
+# Additional CLI registry options: --registry, --whitelist, --whitelist-watch
 
 # =============================================================================
 # Server Configuration

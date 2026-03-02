@@ -275,6 +275,9 @@ func RegisterAPIRoutes(r *gin.Engine, serverCtx *ServerContext) {
 			logging.F("burst", serverCtx.RateLimiter.burst))
 	}
 
+	// Register health check endpoints (required for Kubernetes probes)
+	RegisterHealthEndpoints(r, serverCtx)
+
 	// AuthZEN well-known discovery endpoint (Section 9 of base spec)
 	r.GET("/.well-known/authzen-configuration", WellKnownHandler(serverCtx.BaseURL))
 

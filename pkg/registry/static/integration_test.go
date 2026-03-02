@@ -9,6 +9,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -259,4 +261,160 @@ func generateTestCert(t *testing.T) *x509.Certificate {
 	require.NoError(t, err)
 
 	return cert
+}
+
+// TestWhitelistRegistry_WithTestServer tests the WhitelistRegistry
+// integration with the testserver.
+func TestWhitelistRegistry_WithTestServer(t *testing.T) {
+	// Create whitelist registry with specific issuers and verifiers
+	reg := static.NewWhitelistRegistry(
+		static.WithWhitelistName("test-whitelist"),
+		static.WithWhitelistDescription("Test whitelist registry"),
+	)
+	reg.AddIssuer("https://pid-issuer.example.com")
+	reg.AddIssuer("https://issuer.example.org")
+	reg.AddVerifier("https://verifier.example.com")
+
+	// Create test server with whitelist registry
+	srv := testserver.New(testserver.WithRegistry(reg))
+	defer srv.Close()
+
+	// Create client
+	client := authzenclient.New(srv.URL())
+	ctx := context.Background()
+
+	// Test: trusted issuer should be accepted
+	resp, err := client.Evaluate(ctx, &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://pid-issuer.example.com",
+		},
+		Action: &authzen.Action{
+			Name: "issuer",
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Decision, "whitelisted issuer should be trusted")
+
+	// Test: untrusted issuer should be rejected
+	resp, err = client.Evaluate(ctx, &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://untrusted.example.com",
+		},
+		Action: &authzen.Action{
+			Name: "issuer",
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Decision, "non-whitelisted issuer should not be trusted")
+
+	// Test: trusted verifier should be accepted
+	resp, err = client.Evaluate(ctx, &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://verifier.example.com",
+		},
+		Action: &authzen.Action{
+			Name: "verifier",
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Decision, "whitelisted verifier should be trusted")
+}
+
+// TestWhitelistRegistry_WildcardMatch tests wildcard pattern matching
+// through the HTTP API.
+func TestWhitelistRegistry_WildcardMatch(t *testing.T) {
+	// Create whitelist with wildcard patterns
+	reg := static.NewWhitelistRegistry(
+		static.WithWhitelistName("wildcard-test"),
+	)
+	reg.AddIssuer("https://example.com/*") // Wildcard prefix match
+
+	srv := testserver.New(testserver.WithRegistry(reg))
+	defer srv.Close()
+
+	client := authzenclient.New(srv.URL())
+	ctx := context.Background()
+
+	// Test: URL matching wildcard should be accepted
+	resp, err := client.Evaluate(ctx, &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://example.com/issuer1",
+		},
+		Action: &authzen.Action{
+			Name: "issuer",
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Decision, "URL matching wildcard should be trusted")
+
+	// Test: URL not matching wildcard should be rejected
+	resp, err = client.Evaluate(ctx, &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://other-domain.com/issuer",
+		},
+		Action: &authzen.Action{
+			Name: "issuer",
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Decision, "URL not matching wildcard should not be trusted")
+}
+
+// TestWhitelistRegistry_FromFile_Integration tests loading whitelist from file
+// and using it via the HTTP API.
+func TestWhitelistRegistry_FromFile_Integration(t *testing.T) {
+	// Create temp whitelist config file
+	yamlContent := `
+issuers:
+  - https://file-issuer.example.com
+  - https://pid.example.org
+verifiers:
+  - https://file-verifier.example.com
+trusted_subjects:
+  - https://any-role.example.com
+`
+	tmpDir := t.TempDir()
+	yamlPath := filepath.Join(tmpDir, "whitelist.yaml")
+	require.NoError(t, os.WriteFile(yamlPath, []byte(yamlContent), 0644))
+
+	// Create registry from file
+	reg, err := static.NewWhitelistRegistryFromFile(yamlPath, false)
+	require.NoError(t, err)
+
+	srv := testserver.New(testserver.WithRegistry(reg))
+	defer srv.Close()
+
+	client := authzenclient.New(srv.URL())
+	ctx := context.Background()
+
+	// Test: issuer from file should be accepted
+	resp, err := client.Evaluate(ctx, &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://file-issuer.example.com",
+		},
+		Action: &authzen.Action{
+			Name: "issuer",
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Decision, "issuer from file config should be trusted")
+
+	// Test: trusted_subjects fallback should work
+	resp, err = client.Evaluate(ctx, &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://any-role.example.com",
+		},
+		Action: &authzen.Action{
+			Name: "custom-role",
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Decision, "trusted_subjects should match any role")
 }

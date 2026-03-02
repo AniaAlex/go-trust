@@ -61,6 +61,15 @@ gt --etsi-cert-bundle /path/to/trusted-certs.pem
 # With TSL XML files directly
 gt --etsi-tsl-files eu-lotl.xml,se-tsl.xml
 
+# With whitelist registry (for simple deployments)
+gt --registry whitelist --whitelist /etc/go-trust/whitelist.yaml
+
+# With always-trusted registry (development/testing only!)
+gt --registry always-trusted
+
+# With configuration file
+gt --config /etc/go-trust/config.yaml
+
 # With external URL for discovery (behind reverse proxy)
 gt --external-url https://pdp.example.com --etsi-cert-bundle certs.pem
 
@@ -83,6 +92,9 @@ gt \
 | `--external-url` | External URL for discovery | auto-detect |
 | `--etsi-cert-bundle` | PEM file with trusted CA certs | - |
 | `--etsi-tsl-files` | Comma-separated TSL XML files | - |
+| `--registry` | Registry type: whitelist, always-trusted, never-trusted | - |
+| `--whitelist` | Path to whitelist YAML/JSON config file | - |
+| `--whitelist-watch` | Watch whitelist file for changes | `true` |
 | `--log-level` | Log level: debug, info, warn, error | `info` |
 | `--log-format` | Log format: text, json | `text` |
 | `--config` | Configuration file (YAML) | - |

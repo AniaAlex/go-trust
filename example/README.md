@@ -63,12 +63,17 @@ ETSI TSL options:
   --etsi-cert-bundle string  Path to PEM file with trusted CA certificates
   --etsi-tsl-files string    Comma-separated list of local TSL XML files
 
+Whitelist/Static Registry options:
+  --registry string      Registry type: whitelist, always-trusted, never-trusted
+  --whitelist string     Path to whitelist YAML/JSON config file
+  --whitelist-watch      Watch whitelist file for changes (default: true)
+
 Logging options:
   --log-level string   debug, info, warn, error (default: info)
   --log-format string  text or json (default: text)
 
 Other:
-  --config string  Configuration file path (YAML format) - partial support
+  --config string  Configuration file path (YAML format)
   --help           Show help message
   --version        Show version information
 ```

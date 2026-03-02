@@ -16,10 +16,54 @@ import (
 // Config represents the application configuration structure.
 // It includes settings for the server, logging, pipeline processing, and security.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Logging  LoggingConfig  `yaml:"logging"`
-	Pipeline PipelineConfig `yaml:"pipeline"`
-	Security SecurityConfig `yaml:"security"`
+	Server     ServerConfig     `yaml:"server"`
+	Logging    LoggingConfig    `yaml:"logging"`
+	Pipeline   PipelineConfig   `yaml:"pipeline"`
+	Security   SecurityConfig   `yaml:"security"`
+	Registries RegistriesConfig `yaml:"registries"`
+}
+
+// RegistriesConfig contains configuration for all trust registries.
+type RegistriesConfig struct {
+	ETSI      *ETSIRegistryConfig      `yaml:"etsi,omitempty"`
+	Whitelist *WhitelistRegistryConfig `yaml:"whitelist,omitempty"`
+	// Static test registries
+	AlwaysTrusted *StaticRegistryConfig `yaml:"always_trusted,omitempty"`
+	NeverTrusted  *StaticRegistryConfig `yaml:"never_trusted,omitempty"`
+}
+
+// ETSIRegistryConfig contains ETSI TSL registry configuration.
+type ETSIRegistryConfig struct {
+	Enabled            bool     `yaml:"enabled"`
+	Name               string   `yaml:"name"`
+	Description        string   `yaml:"description"`
+	CertBundle         string   `yaml:"cert_bundle,omitempty"`
+	TSLFiles           []string `yaml:"tsl_files,omitempty"`
+	TSLURLs            []string `yaml:"tsl_urls,omitempty"`
+	FollowRefs         bool     `yaml:"follow_refs"`
+	MaxRefDepth        int      `yaml:"max_ref_depth"`
+	AllowNetworkAccess bool     `yaml:"allow_network_access"`
+	FetchTimeout       string   `yaml:"fetch_timeout"`
+	UserAgent          string   `yaml:"user_agent"`
+}
+
+// WhitelistRegistryConfig contains whitelist registry configuration.
+type WhitelistRegistryConfig struct {
+	Enabled         bool     `yaml:"enabled"`
+	Name            string   `yaml:"name"`
+	Description     string   `yaml:"description"`
+	ConfigFile      string   `yaml:"config_file,omitempty"`
+	WatchFile       bool     `yaml:"watch_file"`
+	Issuers         []string `yaml:"issuers,omitempty"`
+	Verifiers       []string `yaml:"verifiers,omitempty"`
+	TrustedSubjects []string `yaml:"trusted_subjects,omitempty"`
+}
+
+// StaticRegistryConfig contains static (always/never trusted) registry configuration.
+type StaticRegistryConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
 }
 
 // ServerConfig contains HTTP server configuration settings.

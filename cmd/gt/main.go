@@ -10,8 +10,10 @@ import (
 	"github.com/sirosfoundation/g119612/pkg/logging"
 	_ "github.com/sirosfoundation/go-trust/docs/swagger" // Import generated docs
 	"github.com/sirosfoundation/go-trust/pkg/api"
+	"github.com/sirosfoundation/go-trust/pkg/config"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 	"github.com/sirosfoundation/go-trust/pkg/registry/etsi"
+	"github.com/sirosfoundation/go-trust/pkg/registry/static"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
@@ -67,6 +69,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\nETSI TSL Registry Options:")
 	fmt.Fprintln(os.Stderr, "  --etsi-cert-bundle   Path to PEM file with trusted CA certificates")
 	fmt.Fprintln(os.Stderr, "  --etsi-tsl-files     Comma-separated list of local TSL XML files")
+	fmt.Fprintln(os.Stderr, "\nWhitelist Registry Options:")
+	fmt.Fprintln(os.Stderr, "  --registry           Registry type: whitelist, always-trusted, never-trusted")
+	fmt.Fprintln(os.Stderr, "  --whitelist          Path to whitelist YAML/JSON config file")
+	fmt.Fprintln(os.Stderr, "  --whitelist-watch    Watch whitelist file for changes (default: true)")
 	fmt.Fprintln(os.Stderr, "\nLogging Options:")
 	fmt.Fprintln(os.Stderr, "  --log-level    Logging level: debug, info, warn, error (default: info)")
 	fmt.Fprintln(os.Stderr, "  --log-format   Logging format: text or json (default: text)")
@@ -74,6 +80,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  - For TSL processing (load, transform, sign, publish), use tsl-tool from g119612")
 	fmt.Fprintln(os.Stderr, "  - This server consumes pre-processed TSL data (PEM bundles or XML files)")
 	fmt.Fprintln(os.Stderr, "  - Run tsl-tool via cron to update TSL data periodically")
+	fmt.Fprintln(os.Stderr, "  - Use --registry=whitelist --whitelist=/path/to/whitelist.yaml for simple deployments")
 	fmt.Fprintln(os.Stderr, "")
 }
 
@@ -88,6 +95,11 @@ func main() {
 	// ETSI registry options
 	etsiCertBundle := flag.String("etsi-cert-bundle", "", "Path to PEM file with trusted CA certificates")
 	etsiTSLFiles := flag.String("etsi-tsl-files", "", "Comma-separated list of local TSL XML files")
+
+	// Whitelist/static registry options
+	registryType := flag.String("registry", "", "Registry type: whitelist, always-trusted, never-trusted")
+	whitelistFile := flag.String("whitelist", "", "Path to whitelist YAML/JSON config file")
+	whitelistWatch := flag.Bool("whitelist-watch", true, "Watch whitelist file for changes")
 
 	// Logging options
 	logLevel := flag.String("log-level", "info", "Logging level: debug, info, warn, error")
@@ -133,10 +145,35 @@ func main() {
 		logging.F("host", *host),
 		logging.F("port", *port))
 
-	// TODO: Load configuration file if provided
+	// Load configuration file if provided
+	var cfg *config.Config
 	if *configFile != "" {
-		logger.Warn("Configuration file support not yet implemented",
+		var err error
+		cfg, err = config.LoadConfig(*configFile)
+		if err != nil {
+			logger.Fatal("Failed to load configuration file",
+				logging.F("file", *configFile),
+				logging.F("error", err.Error()))
+		}
+		logger.Info("Loaded configuration from file",
 			logging.F("file", *configFile))
+
+		// Use config file values if CLI flags weren't explicitly set
+		if *host == "127.0.0.1" && cfg.Server.Host != "" {
+			*host = cfg.Server.Host
+		}
+		if *port == "6001" && cfg.Server.Port != "" {
+			*port = cfg.Server.Port
+		}
+		if *externalURL == "" && cfg.Server.ExternalURL != "" {
+			*externalURL = cfg.Server.ExternalURL
+		}
+		if *logLevel == "info" && cfg.Logging.Level != "" {
+			*logLevel = cfg.Logging.Level
+		}
+		if *logFormat == "text" && cfg.Logging.Format != "" {
+			*logFormat = cfg.Logging.Format
+		}
 	}
 
 	// Create server context
@@ -145,7 +182,12 @@ func main() {
 	// Initialize RegistryManager
 	registryMgr := registry.NewRegistryManager(registry.FirstMatch, 30*time.Second)
 
-	// Configure ETSI TSL registry if cert bundle or TSL files provided
+	// Configure registries from config file
+	if cfg != nil {
+		configureRegistriesFromConfig(cfg, registryMgr, logger)
+	}
+
+	// CLI flags override config file - Configure ETSI TSL registry if cert bundle or TSL files provided
 	if *etsiCertBundle != "" || *etsiTSLFiles != "" {
 		logger.Info("Configuring ETSI TSL registry")
 
@@ -176,9 +218,40 @@ func main() {
 
 		registryMgr.Register(tslRegistry)
 		logger.Info("ETSI TSL registry registered")
-	} else {
-		logger.Warn("No ETSI TSL configuration provided (use --etsi-cert-bundle or --etsi-tsl-files)")
-		logger.Warn("Server will start but ETSI trust evaluation will not be available")
+	}
+
+	// Configure whitelist/static registry if requested via CLI
+	switch *registryType {
+	case "whitelist":
+		if *whitelistFile != "" {
+			logger.Info("Configuring whitelist registry from file",
+				logging.F("path", *whitelistFile),
+				logging.F("watch", *whitelistWatch))
+			whitelistReg, err := static.NewWhitelistRegistryFromFile(*whitelistFile, *whitelistWatch,
+				static.WithWhitelistName("whitelist"),
+				static.WithWhitelistDescription("URL whitelist from "+*whitelistFile))
+			if err != nil {
+				logger.Fatal("Failed to create whitelist registry",
+					logging.F("error", err.Error()))
+			}
+			registryMgr.Register(whitelistReg)
+			logger.Info("Whitelist registry registered")
+		} else {
+			logger.Fatal("--whitelist flag required when using --registry=whitelist")
+		}
+	case "always-trusted":
+		logger.Warn("Using always-trusted registry - ALL trust requests will be approved")
+		logger.Warn("This is only suitable for development/testing!")
+		registryMgr.Register(static.NewAlwaysTrustedRegistry("always-trusted"))
+	case "never-trusted":
+		logger.Info("Using never-trusted registry - ALL trust requests will be denied")
+		registryMgr.Register(static.NewNeverTrustedRegistry("never-trusted"))
+	case "":
+		// No static registry configured
+	default:
+		logger.Fatal("Unknown registry type",
+			logging.F("type", *registryType),
+			logging.F("valid", "whitelist, always-trusted, never-trusted"))
 	}
 
 	// TODO: Add other registries (OpenID Federation, DID Web) based on config
@@ -216,6 +289,108 @@ func main() {
 
 	if err := r.Run(listenAddr); err != nil {
 		logger.Fatal("API server error", logging.F("error", err.Error()))
+	}
+}
+
+// configureRegistriesFromConfig configures registries from the loaded config file.
+func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.RegistryManager, logger logging.Logger) {
+	// Configure ETSI TSL registry from config
+	if cfg.Registries.ETSI != nil && cfg.Registries.ETSI.Enabled {
+		logger.Info("Configuring ETSI TSL registry from config file")
+		etsiCfg := cfg.Registries.ETSI
+
+		tslConfig := etsi.TSLConfig{
+			Name:        etsiCfg.Name,
+			Description: etsiCfg.Description,
+			CertBundle:  etsiCfg.CertBundle,
+			TSLFiles:    etsiCfg.TSLFiles,
+		}
+
+		if tslConfig.Name == "" {
+			tslConfig.Name = "ETSI-TSL"
+		}
+		if tslConfig.Description == "" {
+			tslConfig.Description = "ETSI TS 119612 Trust Status List Registry"
+		}
+
+		tslRegistry, err := etsi.NewTSLRegistry(tslConfig)
+		if err != nil {
+			logger.Fatal("Failed to create ETSI TSL registry from config",
+				logging.F("error", err.Error()))
+		}
+
+		registryMgr.Register(tslRegistry)
+		logger.Info("ETSI TSL registry registered from config")
+	}
+
+	// Configure whitelist registry from config
+	if cfg.Registries.Whitelist != nil && cfg.Registries.Whitelist.Enabled {
+		logger.Info("Configuring whitelist registry from config file")
+		wlCfg := cfg.Registries.Whitelist
+
+		name := wlCfg.Name
+		if name == "" {
+			name = "whitelist"
+		}
+		desc := wlCfg.Description
+		if desc == "" {
+			desc = "Static URL Whitelist"
+		}
+
+		var whitelistReg *static.WhitelistRegistry
+		var err error
+
+		if wlCfg.ConfigFile != "" {
+			// Load from external config file
+			whitelistReg, err = static.NewWhitelistRegistryFromFile(
+				wlCfg.ConfigFile,
+				wlCfg.WatchFile,
+				static.WithWhitelistName(name),
+				static.WithWhitelistDescription(desc),
+			)
+			if err != nil {
+				logger.Fatal("Failed to create whitelist registry from config file",
+					logging.F("config_file", wlCfg.ConfigFile),
+					logging.F("error", err.Error()))
+			}
+		} else {
+			// Use inline configuration
+			whitelistReg = static.NewWhitelistRegistry(
+				static.WithWhitelistName(name),
+				static.WithWhitelistDescription(desc),
+				static.WithWhitelistConfig(static.WhitelistConfig{
+					Issuers:         wlCfg.Issuers,
+					Verifiers:       wlCfg.Verifiers,
+					TrustedSubjects: wlCfg.TrustedSubjects,
+				}),
+			)
+		}
+
+		registryMgr.Register(whitelistReg)
+		logger.Info("Whitelist registry registered from config",
+			logging.F("issuers", len(wlCfg.Issuers)),
+			logging.F("verifiers", len(wlCfg.Verifiers)))
+	}
+
+	// Configure always-trusted registry from config
+	if cfg.Registries.AlwaysTrusted != nil && cfg.Registries.AlwaysTrusted.Enabled {
+		logger.Warn("Configuring always-trusted registry from config")
+		logger.Warn("ALL trust requests will be approved - only suitable for development/testing!")
+		name := cfg.Registries.AlwaysTrusted.Name
+		if name == "" {
+			name = "always-trusted"
+		}
+		registryMgr.Register(static.NewAlwaysTrustedRegistry(name))
+	}
+
+	// Configure never-trusted registry from config
+	if cfg.Registries.NeverTrusted != nil && cfg.Registries.NeverTrusted.Enabled {
+		logger.Info("Configuring never-trusted registry from config")
+		name := cfg.Registries.NeverTrusted.Name
+		if name == "" {
+			name = "never-trusted"
+		}
+		registryMgr.Register(static.NewNeverTrustedRegistry(name))
 	}
 }
 
