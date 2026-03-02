@@ -220,6 +220,41 @@ Resolves and validates DID Web VH (Verifiable History) identifiers with cryptogr
 
 **Supported resource types:** `did_document`, `jwk`, `verification_method`
 
+#### mDOC IACA Registry
+
+Dynamically validates mDOC/mDL X.509 certificate chains against IACA (Issuing Authority Certificate Authority) certificates fetched from OpenID4VCI issuers.
+
+**Architecture:**
+1. Receives trust evaluation with issuer URL (`subject.id`) and X5C chain (`resource.key`)
+2. Fetches issuer's OpenID4VCI metadata (discovers `mdoc_iacas_uri` endpoint)
+3. Fetches IACA certificates from `mdoc_iacas_uri`
+4. Validates X5C chain against fetched IACAs
+5. Optionally enforces issuer allowlist
+
+**Supported resource types:** `x5c`
+
+```go
+import "github.com/sirosfoundation/go-trust/pkg/registry/mdociaca"
+
+reg, err := mdociaca.New(&mdociaca.Config{
+    Name:            "mdoc-iaca",
+    IssuerAllowlist: []string{"https://issuer.example.com"},  // Optional
+    CacheTTL:        time.Hour,
+})
+
+// Evaluate trust for an mDOC issuer
+req := &authzen.EvaluationRequest{
+    Subject:  authzen.Subject{Type: "key", ID: "https://issuer.example.com"},
+    Resource: authzen.Resource{Type: "x5c", Key: []interface{}{dsB64, iacaB64}},
+}
+resp, err := reg.Evaluate(ctx, req)
+```
+
+**Use cases:**
+- Mobile driving license (mDL) issuer validation
+- EUDI wallet mDOC credential issuance
+- Any OpenID4VCI issuer publishing IACA certificates
+
 ### Static Trust Registries
 
 The `pkg/registry/static` package provides simple TrustRegistry implementations for testing, development, and basic use cases:
@@ -229,19 +264,60 @@ The `pkg/registry/static` package provides simple TrustRegistry implementations 
 | `AlwaysTrustedRegistry` | Always returns `decision=true` | Testing, development, trust-all scenarios |
 | `NeverTrustedRegistry` | Always returns `decision=false` | Testing trust rejection, deny-all scenarios |
 | `SystemCertPoolRegistry` | Validates X509 against OS CA bundle | Simple TLS trust without ETSI TSL |
+| `WhitelistRegistry` | URL-based whitelist with file watching | Simple issuer/verifier allowlisting |
 
 ```go
 import "github.com/sirosfoundation/go-trust/pkg/registry/static"
 
-// Accept all trust requests
-registry := static.NewAlwaysTrustedRegistry()
+// Accept all trust requests (testing only!)
+registry := static.NewAlwaysTrustedRegistry("test-always-trusted")
 
-// Reject all trust requests  
-registry := static.NewNeverTrustedRegistry()
+// Reject all trust requests (testing only!)
+registry := static.NewNeverTrustedRegistry("test-never-trusted")
 
 // Validate against system CA bundle
-registry := static.NewSystemCertPoolRegistry()
+registry, _ := static.NewSystemCertPoolRegistry(static.SystemCertPoolConfig{
+    Name:        "system-ca",
+    Description: "System root CA certificates",
+})
+
+// URL whitelist from config file (with auto-reload)
+registry, _ := static.NewWhitelistRegistryFromFile("/etc/go-trust/whitelist.yaml", true)
+defer registry.Close()
+
+// URL whitelist configured programmatically
+registry := static.NewWhitelistRegistry()
+registry.AddIssuer("https://pid-issuer.example.com")
+registry.AddVerifier("https://verifier.example.com")
 ```
+
+#### WhitelistRegistry Configuration
+
+The whitelist registry supports YAML or JSON configuration files:
+
+```yaml
+# whitelist.yaml
+issuers:
+  - https://pid-issuer.example.com
+  - https://issuer.example.org
+  - https://trusted-domain.com/*  # Wildcard prefix match
+
+verifiers:
+  - https://verifier.example.com
+  - https://rp.example.org
+
+trusted_subjects:
+  - https://any-role.example.com  # Matches any role
+```
+
+**Features:**
+- Role-based matching: `issuers` for credential issuers, `verifiers` for relying parties
+- Wildcard support: `https://example.com/*` matches any path under that domain
+- Global wildcard: `*` matches all subjects (use with caution)
+- File watching: Automatically reloads config when file changes (when `watch=true`)
+- Runtime updates: `AddIssuer()`, `RemoveIssuer()`, `AddVerifier()`, `RemoveVerifier()`
+
+**Security Note:** WhitelistRegistry provides URL-based trust only. Signature verification must be performed at the application layer. For cryptographic trust verification, use ETSI TSL, OpenID Federation, or other advanced registries.
 
 ## Deployment
 
@@ -397,6 +473,11 @@ srv := testserver.New(testserver.WithRegistry(static.NewNeverTrustedRegistry()))
 
 // Test with system CA validation
 srv := testserver.New(testserver.WithRegistry(static.NewSystemCertPoolRegistry()))
+
+// Test with specific whitelist
+reg := static.NewWhitelistRegistry()
+reg.AddIssuer("https://test-issuer.example.com")
+srv := testserver.New(testserver.WithRegistry(reg))
 ```
 
 ## Development
@@ -430,7 +511,7 @@ go-trust/
 │   │   ├── oidfed/   # OpenID Federation registry
 │   │   ├── didweb/   # DID Web registry
 │   │   ├── didwebvh/ # DID Web VH registry
-│   │   └── static/   # Static registries (always/never/system)
+│   │   └── static/   # Static registries (always/never/system/whitelist)
 │   ├── logging/    # Structured logging
 │   └── testserver/ # Embedded test server
 ├── example/        # Example configurations

@@ -1,0 +1,26 @@
+# Example whitelist configuration for go-trust
+#
+# This file configures which issuers and verifiers are trusted.
+# For more complex trust management, consider using OpenID Federation,
+# ETSI Trust Lists, or other registry implementations.
+#
+# The registry will automatically reload this file when it changes
+# if file watching is enabled.
+
+# Trusted credential issuers (PID providers, mdoc issuers)
+issuers:
+  - https://pid-provider.example.com
+  - https://issuer.example.org
+  # Wildcard: trust all issuers from a domain
+  - https://trusted-domain.example.com/*
+
+# Trusted verifiers (relying parties)
+verifiers:
+  - https://verifier.example.com
+  - https://rp.example.org
+
+# Generic trusted subjects (matches any role)
+# Use this for subjects that should be trusted regardless of whether
+# they act as issuer or verifier
+trusted_subjects:
+  - https://trusted-any-role.example.com

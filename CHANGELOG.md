@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- WhitelistRegistry (`pkg/registry/static/whitelist.go`)
+  - Simple URL-based whitelist for trusted issuers and verifiers
+  - YAML/JSON configuration file support
+  - Automatic file watching and config reload via fsnotify
+  - Wildcard matching: `https://example.com/*` for prefix match, `*` for all
+  - Role-based lists: `issuers`, `verifiers`, `trusted_subjects`
+  - Runtime management: `AddIssuer()`, `RemoveIssuer()`, `AddVerifier()`, `RemoveVerifier()`
+  - 87% test coverage
+
 - Standalone AuthZEN client library (`pkg/authzenclient/`)
   - HTTP client for AuthZEN PDPs with discovery support
   - Methods: `Discover()`, `Evaluate()`, `Resolve()`, `EvaluateX5C()`, `EvaluateJWK()`
@@ -35,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enhanced README.md with:
   - ETSI TSL Registry section documenting both standalone and server modes
+  - mDOC IACA Registry section documenting dynamic IACA certificate validation
   - Updated package structure diagram
   - Configuration options table for TSLConfig
 

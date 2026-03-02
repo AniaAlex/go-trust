@@ -7,6 +7,7 @@ replace github.com/moov-io/signedxml v1.2.3 => github.com/leifj/signedxml v1.2.3
 replace github.com/russellhaering/goxmldsig v1.5.0 => github.com/sirosfoundation/goxmldsig v1.5.0-leifj1
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-oidfed/lib v0.9.0
 	github.com/multiformats/go-multibase v0.2.0
