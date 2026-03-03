@@ -27,6 +27,13 @@ type Config struct {
 type RegistriesConfig struct {
 	ETSI      *ETSIRegistryConfig      `yaml:"etsi,omitempty"`
 	Whitelist *WhitelistRegistryConfig `yaml:"whitelist,omitempty"`
+	// OpenID Federation registry
+	OIDFed *OIDFedRegistryConfig `yaml:"oidfed,omitempty"`
+	// DID method registries
+	DIDWeb   *DIDWebRegistryConfig   `yaml:"didweb,omitempty"`
+	DIDWebVH *DIDWebVHRegistryConfig `yaml:"didwebvh,omitempty"`
+	// mDOC IACA registry
+	MDOCIACA *MDOCIACARegistryConfig `yaml:"mdociaca,omitempty"`
 	// Static test registries
 	AlwaysTrusted *StaticRegistryConfig `yaml:"always_trusted,omitempty"`
 	NeverTrusted  *StaticRegistryConfig `yaml:"never_trusted,omitempty"`
@@ -64,6 +71,57 @@ type StaticRegistryConfig struct {
 	Enabled     bool   `yaml:"enabled"`
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+}
+
+// OIDFedRegistryConfig contains OpenID Federation registry configuration.
+type OIDFedRegistryConfig struct {
+	Enabled            bool                      `yaml:"enabled"`
+	Name               string                    `yaml:"name,omitempty"`
+	Description        string                    `yaml:"description,omitempty"`
+	TrustAnchors       []OIDFedTrustAnchorConfig `yaml:"trust_anchors"`
+	RequiredTrustMarks []string                  `yaml:"required_trust_marks,omitempty"`
+	EntityTypes        []string                  `yaml:"entity_types,omitempty"`
+	CacheTTL           string                    `yaml:"cache_ttl,omitempty"`
+	MaxCacheSize       int                       `yaml:"max_cache_size,omitempty"`
+	MaxChainDepth      int                       `yaml:"max_chain_depth,omitempty"`
+}
+
+// OIDFedTrustAnchorConfig defines a trust anchor for OpenID Federation.
+type OIDFedTrustAnchorConfig struct {
+	EntityID string `yaml:"entity_id"`
+	// JWKS is optional explicit JWKS for the trust anchor (JSON string)
+	// If not provided, JWKS will be fetched from the entity configuration
+	JWKS string `yaml:"jwks,omitempty"`
+}
+
+// DIDWebRegistryConfig contains did:web registry configuration.
+type DIDWebRegistryConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	Name               string `yaml:"name,omitempty"`
+	Description        string `yaml:"description,omitempty"`
+	Timeout            string `yaml:"timeout,omitempty"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"`
+	AllowHTTP          bool   `yaml:"allow_http,omitempty"`
+}
+
+// DIDWebVHRegistryConfig contains did:webvh registry configuration.
+type DIDWebVHRegistryConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	Name               string `yaml:"name,omitempty"`
+	Description        string `yaml:"description,omitempty"`
+	Timeout            string `yaml:"timeout,omitempty"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"`
+	AllowHTTP          bool   `yaml:"allow_http,omitempty"`
+}
+
+// MDOCIACARegistryConfig contains mDOC IACA registry configuration.
+type MDOCIACARegistryConfig struct {
+	Enabled         bool     `yaml:"enabled"`
+	Name            string   `yaml:"name,omitempty"`
+	Description     string   `yaml:"description,omitempty"`
+	IssuerAllowlist []string `yaml:"issuer_allowlist,omitempty"`
+	CacheTTL        string   `yaml:"cache_ttl,omitempty"`
+	HTTPTimeout     string   `yaml:"http_timeout,omitempty"`
 }
 
 // ServerConfig contains HTTP server configuration settings.

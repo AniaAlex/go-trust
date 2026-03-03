@@ -12,7 +12,11 @@ import (
 	"github.com/sirosfoundation/go-trust/pkg/api"
 	"github.com/sirosfoundation/go-trust/pkg/config"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
+	"github.com/sirosfoundation/go-trust/pkg/registry/didweb"
+	"github.com/sirosfoundation/go-trust/pkg/registry/didwebvh"
 	"github.com/sirosfoundation/go-trust/pkg/registry/etsi"
+	"github.com/sirosfoundation/go-trust/pkg/registry/mdociaca"
+	"github.com/sirosfoundation/go-trust/pkg/registry/oidfed"
 	"github.com/sirosfoundation/go-trust/pkg/registry/static"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -254,8 +258,6 @@ func main() {
 			logging.F("valid", "whitelist, always-trusted, never-trusted"))
 	}
 
-	// TODO: Add other registries (OpenID Federation, DID Web) based on config
-
 	serverCtx.RegistryManager = registryMgr
 
 	// Set BaseURL for .well-known discovery
@@ -391,6 +393,159 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 			name = "never-trusted"
 		}
 		registryMgr.Register(static.NewNeverTrustedRegistry(name))
+	}
+
+	// Configure OpenID Federation registry from config
+	if cfg.Registries.OIDFed != nil && cfg.Registries.OIDFed.Enabled {
+		logger.Info("Configuring OpenID Federation registry from config file")
+		oidfedCfg := cfg.Registries.OIDFed
+
+		// Build trust anchor configs
+		trustAnchors := make([]oidfed.TrustAnchorConfig, len(oidfedCfg.TrustAnchors))
+		for i, ta := range oidfedCfg.TrustAnchors {
+			trustAnchors[i] = oidfed.TrustAnchorConfig{
+				EntityID: ta.EntityID,
+				// JWKS parsing would need additional handling if provided as string
+			}
+		}
+
+		oidfedConfig := oidfed.Config{
+			TrustAnchors:       trustAnchors,
+			RequiredTrustMarks: oidfedCfg.RequiredTrustMarks,
+			EntityTypes:        oidfedCfg.EntityTypes,
+			Description:        oidfedCfg.Description,
+			MaxCacheSize:       oidfedCfg.MaxCacheSize,
+			MaxChainDepth:      oidfedCfg.MaxChainDepth,
+		}
+
+		// Parse CacheTTL if provided
+		if oidfedCfg.CacheTTL != "" {
+			if ttl, err := time.ParseDuration(oidfedCfg.CacheTTL); err == nil {
+				oidfedConfig.CacheTTL = ttl
+			} else {
+				logger.Warn("Invalid cache_ttl for oidfed registry, using default",
+					logging.F("value", oidfedCfg.CacheTTL),
+					logging.F("error", err.Error()))
+			}
+		}
+
+		oidfedReg, err := oidfed.NewOIDFedRegistry(oidfedConfig)
+		if err != nil {
+			logger.Fatal("Failed to create OpenID Federation registry from config",
+				logging.F("error", err.Error()))
+		}
+
+		registryMgr.Register(oidfedReg)
+		logger.Info("OpenID Federation registry registered from config",
+			logging.F("trust_anchors", len(trustAnchors)))
+	}
+
+	// Configure did:web registry from config
+	if cfg.Registries.DIDWeb != nil && cfg.Registries.DIDWeb.Enabled {
+		logger.Info("Configuring did:web registry from config file")
+		dwCfg := cfg.Registries.DIDWeb
+
+		didwebConfig := didweb.Config{
+			Description:        dwCfg.Description,
+			InsecureSkipVerify: dwCfg.InsecureSkipVerify,
+			AllowHTTP:          dwCfg.AllowHTTP,
+		}
+
+		// Parse Timeout if provided
+		if dwCfg.Timeout != "" {
+			if timeout, err := time.ParseDuration(dwCfg.Timeout); err == nil {
+				didwebConfig.Timeout = timeout
+			} else {
+				logger.Warn("Invalid timeout for didweb registry, using default",
+					logging.F("value", dwCfg.Timeout),
+					logging.F("error", err.Error()))
+			}
+		}
+
+		didwebReg, err := didweb.NewDIDWebRegistry(didwebConfig)
+		if err != nil {
+			logger.Fatal("Failed to create did:web registry from config",
+				logging.F("error", err.Error()))
+		}
+
+		registryMgr.Register(didwebReg)
+		logger.Info("did:web registry registered from config")
+	}
+
+	// Configure did:webvh registry from config
+	if cfg.Registries.DIDWebVH != nil && cfg.Registries.DIDWebVH.Enabled {
+		logger.Info("Configuring did:webvh registry from config file")
+		dwvhCfg := cfg.Registries.DIDWebVH
+
+		didwebvhConfig := didwebvh.Config{
+			Description:        dwvhCfg.Description,
+			InsecureSkipVerify: dwvhCfg.InsecureSkipVerify,
+			AllowHTTP:          dwvhCfg.AllowHTTP,
+		}
+
+		// Parse Timeout if provided
+		if dwvhCfg.Timeout != "" {
+			if timeout, err := time.ParseDuration(dwvhCfg.Timeout); err == nil {
+				didwebvhConfig.Timeout = timeout
+			} else {
+				logger.Warn("Invalid timeout for didwebvh registry, using default",
+					logging.F("value", dwvhCfg.Timeout),
+					logging.F("error", err.Error()))
+			}
+		}
+
+		didwebvhReg, err := didwebvh.NewDIDWebVHRegistry(didwebvhConfig)
+		if err != nil {
+			logger.Fatal("Failed to create did:webvh registry from config",
+				logging.F("error", err.Error()))
+		}
+
+		registryMgr.Register(didwebvhReg)
+		logger.Info("did:webvh registry registered from config")
+	}
+
+	// Configure mDOC IACA registry from config
+	if cfg.Registries.MDOCIACA != nil && cfg.Registries.MDOCIACA.Enabled {
+		logger.Info("Configuring mDOC IACA registry from config file")
+		mdocCfg := cfg.Registries.MDOCIACA
+
+		mdocConfig := &mdociaca.Config{
+			Name:            mdocCfg.Name,
+			Description:     mdocCfg.Description,
+			IssuerAllowlist: mdocCfg.IssuerAllowlist,
+		}
+
+		// Parse CacheTTL if provided
+		if mdocCfg.CacheTTL != "" {
+			if ttl, err := time.ParseDuration(mdocCfg.CacheTTL); err == nil {
+				mdocConfig.CacheTTL = ttl
+			} else {
+				logger.Warn("Invalid cache_ttl for mdociaca registry, using default",
+					logging.F("value", mdocCfg.CacheTTL),
+					logging.F("error", err.Error()))
+			}
+		}
+
+		// Parse HTTPTimeout if provided
+		if mdocCfg.HTTPTimeout != "" {
+			if timeout, err := time.ParseDuration(mdocCfg.HTTPTimeout); err == nil {
+				mdocConfig.HTTPTimeout = timeout
+			} else {
+				logger.Warn("Invalid http_timeout for mdociaca registry, using default",
+					logging.F("value", mdocCfg.HTTPTimeout),
+					logging.F("error", err.Error()))
+			}
+		}
+
+		mdocReg, err := mdociaca.New(mdocConfig)
+		if err != nil {
+			logger.Fatal("Failed to create mDOC IACA registry from config",
+				logging.F("error", err.Error()))
+		}
+
+		registryMgr.Register(mdocReg)
+		logger.Info("mDOC IACA registry registered from config",
+			logging.F("issuer_allowlist", len(mdocCfg.IssuerAllowlist)))
 	}
 }
 
