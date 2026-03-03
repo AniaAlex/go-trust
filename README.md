@@ -331,6 +331,89 @@ trusted_subjects:
 
 **Security Note:** WhitelistRegistry provides URL-based trust only. Signature verification must be performed at the application layer. For cryptographic trust verification, use ETSI TSL, OpenID Federation, or other advanced registries.
 
+## Policy Configuration
+
+Policies map action names (from AuthZEN requests) to registry-specific constraints. This enables role-based trust evaluation where different credential types or participant roles have different requirements.
+
+### Configuration Structure
+
+```yaml
+policies:
+  # Default policy when action.name doesn't match any specific policy
+  default_policy: credential-verifier
+
+  policies:
+    # Policy for credential issuers
+    credential-issuer:
+      description: "Trust requirements for credential issuers"
+      
+      # ETSI TSL constraints
+      etsi:
+        service_types:
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCert"
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCertForESeal"
+        service_statuses:
+          - "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+      
+      # OpenID Federation constraints
+      oidfed:
+        entity_types:
+          - "openid_credential_issuer"
+        required_trust_marks:
+          - "https://dc4eu.eu/tm/issuer"
+      
+      # DID constraints (did:web and did:webvh)
+      did:
+        allowed_domains:
+          - "*.eudiw.dev"
+          - "*.example.com"
+        require_verifiable_history: true
+
+    # Policy for wallet providers
+    wallet-provider:
+      description: "Trust requirements for wallet providers"
+      oidfed:
+        entity_types:
+          - "wallet_provider"
+        required_trust_marks:
+          - "https://dc4eu.eu/tm/wallet"
+      # Override which registries to query
+      registries:
+        - "oidfed-registry"
+
+    # Policy for mDL issuers
+    mdl-issuer:
+      description: "Trust requirements for mDL/mDOC issuers"
+      mdociaca:
+        issuer_allowlist:
+          - "https://pid-issuer.eudiw.dev"
+        require_iaca_endpoint: true
+      registries:
+        - "mdoc-iaca"
+```
+
+### Constraint Types
+
+| Constraint Type | Description | Applicable Registries |
+|-----------------|-------------|----------------------|
+| `etsi` | Service types, statuses, countries | ETSI TSL |
+| `oidfed` | Entity types, trust marks | OpenID Federation |
+| `did` | Allowed domains, verifiable history | DID Web, DID Web VH |
+| `mdociaca` | Issuer allowlist, IACA endpoint | mDOC IACA |
+
+### Example Request
+
+```bash
+# Request with action.name to select policy
+curl -X POST http://localhost:6001/evaluation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject": {"type": "key", "id": "https://issuer.example.com"},
+    "resource": {"type": "x5c", "key": ["MIIC..."]},
+    "action": {"name": "credential-issuer"}
+  }'
+```
+
 ## Deployment
 
 ### Docker
