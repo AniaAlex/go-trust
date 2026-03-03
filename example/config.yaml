@@ -262,3 +262,121 @@ registries:
   # Validates X.509 against OS system CA bundle
   # system_cert_pool:
   #   enabled: false
+
+# =============================================================================
+# Policy Configuration
+# =============================================================================
+# Policies define trust requirements based on action.name in requests.
+# They map application-level roles (issuer, verifier) to registry-specific
+# constraints (ETSI service types, trust marks, DID domains, etc.)
+
+policies:
+  # Default policy used when action.name is not specified
+  default_policy: credential-verifier
+
+  policies:
+    # ---------------------------------------------------------------------------
+    # Credential Issuer Policy
+    # ---------------------------------------------------------------------------
+    # For entities issuing credentials (PID providers, attestation issuers)
+    credential-issuer:
+      description: "Trust requirements for credential issuers"
+
+      # ETSI service types for electronic signatures and seals
+      etsi:
+        service_types:
+          # Qualified Electronic Signature (QES) for natural persons
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCert"
+          # Qualified Electronic Seal for organizations  
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCertForESeal"
+          # Time stamping services
+          - "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST"
+        service_statuses:
+          - "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+
+      # OpenID Federation constraints
+      oidfed:
+        entity_types:
+          - "openid_credential_issuer"
+        required_trust_marks:
+          - "https://dc4eu.eu/tm/issuer"
+
+      # DID constraints for did:web and did:webvh issuers
+      did:
+        allowed_domains:
+          - "*.eudiw.dev"
+          - "*.example.com"
+        require_verifiable_history: true  # Prefer did:webvh
+
+    # ---------------------------------------------------------------------------
+    # Credential Verifier Policy
+    # ---------------------------------------------------------------------------
+    # For entities verifying credentials (relying parties)
+    credential-verifier:
+      description: "Trust requirements for credential verifiers"
+
+      etsi:
+        service_types:
+          # Web authentication services
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCertForESig"
+          # Remote QES services for verifiers
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCert"
+        service_statuses:
+          - "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+
+      oidfed:
+        entity_types:
+          - "openid_relying_party"
+        required_trust_marks:
+          - "https://dc4eu.eu/tm/verifier"
+
+      did:
+        allowed_domains:
+          - "*.eudiw.dev"
+          - "*.example.com"
+
+    # ---------------------------------------------------------------------------
+    # Wallet Provider Policy
+    # ---------------------------------------------------------------------------
+    # For wallet provider attestation validation
+    wallet-provider:
+      description: "Trust requirements for wallet providers"
+
+      oidfed:
+        entity_types:
+          - "wallet_provider"
+        required_trust_marks:
+          - "https://dc4eu.eu/tm/wallet"
+
+      # Only use OpenID Federation for wallet attestation
+      registries:
+        - "oidfed-registry"
+
+    # ---------------------------------------------------------------------------
+    # mDL Issuer Policy
+    # ---------------------------------------------------------------------------
+    # For mobile driving license issuers
+    mdl-issuer:
+      description: "Trust requirements for mDL/mDOC issuers"
+
+      mdociaca:
+        issuer_allowlist:
+          - "https://pid-issuer.eudiw.dev"
+          - "https://mdl-issuer.example.com"
+        require_iaca_endpoint: true
+
+      # Only use mDOC IACA registry
+      registries:
+        - "mdoc-iaca"
+
+    # ---------------------------------------------------------------------------
+    # Generic Trust Policy
+    # ---------------------------------------------------------------------------
+    # Fallback policy with minimal constraints
+    trust:
+      description: "Generic trust evaluation"
+      constraints:
+        require_key_binding: true
+        allowed_key_types:
+          - "x5c"
+          - "jwk"

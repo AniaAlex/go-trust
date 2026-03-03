@@ -178,3 +178,76 @@ func TestPolicyContext_Helpers(t *testing.T) {
 		t.Error("GetETSIServiceTypes returned wrong values")
 	}
 }
+
+func TestPolicyContext_DIDHelpers(t *testing.T) {
+	// Test with nil policy
+	pc := &PolicyContext{}
+	if pc.HasDIDConstraints() {
+		t.Error("HasDIDConstraints should be false for nil policy")
+	}
+	if pc.GetDIDAllowedDomains() != nil {
+		t.Error("GetDIDAllowedDomains should return nil for nil policy")
+	}
+	if pc.RequiresVerifiableHistory() {
+		t.Error("RequiresVerifiableHistory should be false for nil policy")
+	}
+
+	// Test with DID constraints
+	pc = &PolicyContext{
+		Policy: &Policy{
+			DID: &DIDPolicyConstraints{
+				AllowedDomains:           []string{"*.example.com", "trusted.org"},
+				RequiredServices:         []string{"LinkedDomains"},
+				RequireVerifiableHistory: true,
+			},
+		},
+	}
+
+	if !pc.HasDIDConstraints() {
+		t.Error("HasDIDConstraints should be true")
+	}
+
+	domains := pc.GetDIDAllowedDomains()
+	if len(domains) != 2 || domains[0] != "*.example.com" {
+		t.Error("GetDIDAllowedDomains returned wrong values")
+	}
+
+	services := pc.GetDIDRequiredServices()
+	if len(services) != 1 || services[0] != "LinkedDomains" {
+		t.Error("GetDIDRequiredServices returned wrong values")
+	}
+
+	if !pc.RequiresVerifiableHistory() {
+		t.Error("RequiresVerifiableHistory should be true")
+	}
+}
+
+func TestPolicyContext_MDOCIACAHelpers(t *testing.T) {
+	// Test with nil policy
+	pc := &PolicyContext{}
+	if pc.HasMDOCIACAConstraints() {
+		t.Error("HasMDOCIACAConstraints should be false for nil policy")
+	}
+	if pc.GetMDOCIACAIssuerAllowlist() != nil {
+		t.Error("GetMDOCIACAIssuerAllowlist should return nil for nil policy")
+	}
+
+	// Test with MDOCIACA constraints
+	pc = &PolicyContext{
+		Policy: &Policy{
+			MDOCIACA: &MDOCIACAPolicyConstraints{
+				IssuerAllowlist:     []string{"https://issuer1.com", "https://issuer2.com"},
+				RequireIACAEndpoint: true,
+			},
+		},
+	}
+
+	if !pc.HasMDOCIACAConstraints() {
+		t.Error("HasMDOCIACAConstraints should be true")
+	}
+
+	issuers := pc.GetMDOCIACAIssuerAllowlist()
+	if len(issuers) != 2 || issuers[0] != "https://issuer1.com" {
+		t.Error("GetMDOCIACAIssuerAllowlist returned wrong values")
+	}
+}

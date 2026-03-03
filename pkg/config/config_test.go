@@ -360,3 +360,149 @@ func TestEnvOverridesWithPipelineAndSecurityConfig(t *testing.T) {
 		t.Errorf("Allowed origins count = %v, want %v", len(cfg.Security.AllowedOrigins), 2)
 	}
 }
+
+func TestLoadConfigWithPolicies(t *testing.T) {
+	// Create temporary config file with policies
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+server:
+  host: "127.0.0.1"
+  port: "6001"
+
+policies:
+  default_policy: credential-verifier
+
+  policies:
+    credential-issuer:
+      description: "Trust requirements for credential issuers"
+      etsi:
+        service_types:
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCert"
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCertForESeal"
+        service_statuses:
+          - "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+      oidfed:
+        entity_types:
+          - "openid_credential_issuer"
+        required_trust_marks:
+          - "https://dc4eu.eu/tm/issuer"
+      did:
+        allowed_domains:
+          - "*.example.com"
+        require_verifiable_history: true
+
+    credential-verifier:
+      description: "Trust requirements for credential verifiers"
+      registries:
+        - "oidfed-registry"
+        - "etsi-registry"
+      constraints:
+        require_key_binding: true
+        allowed_key_types:
+          - "x5c"
+          - "jwk"
+      oidfed:
+        entity_types:
+          - "openid_relying_party"
+
+    mdl-issuer:
+      description: "Trust requirements for mDL issuers"
+      mdociaca:
+        issuer_allowlist:
+          - "https://mdl-issuer.example.com"
+        require_iaca_endpoint: true
+`
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	// Verify default policy
+	if cfg.Policies.DefaultPolicy != "credential-verifier" {
+		t.Errorf("DefaultPolicy = %v, want %v", cfg.Policies.DefaultPolicy, "credential-verifier")
+	}
+
+	// Verify policies count
+	if len(cfg.Policies.Policies) != 3 {
+		t.Errorf("Policies count = %v, want %v", len(cfg.Policies.Policies), 3)
+	}
+
+	// Verify credential-issuer policy
+	issuerPolicy := cfg.Policies.Policies["credential-issuer"]
+	if issuerPolicy == nil {
+		t.Fatal("credential-issuer policy not found")
+	}
+	if issuerPolicy.Description != "Trust requirements for credential issuers" {
+		t.Errorf("Description = %v, want %v", issuerPolicy.Description, "Trust requirements for credential issuers")
+	}
+
+	// Verify ETSI constraints
+	if issuerPolicy.ETSI == nil {
+		t.Fatal("ETSI constraints not found")
+	}
+	if len(issuerPolicy.ETSI.ServiceTypes) != 2 {
+		t.Errorf("ETSI ServiceTypes count = %v, want %v", len(issuerPolicy.ETSI.ServiceTypes), 2)
+	}
+
+	// Verify OIDFED constraints
+	if issuerPolicy.OIDFed == nil {
+		t.Fatal("OIDFed constraints not found")
+	}
+	if len(issuerPolicy.OIDFed.EntityTypes) != 1 {
+		t.Errorf("OIDFed EntityTypes count = %v, want %v", len(issuerPolicy.OIDFed.EntityTypes), 1)
+	}
+	if len(issuerPolicy.OIDFed.RequiredTrustMarks) != 1 {
+		t.Errorf("OIDFed RequiredTrustMarks count = %v, want %v", len(issuerPolicy.OIDFed.RequiredTrustMarks), 1)
+	}
+
+	// Verify DID constraints
+	if issuerPolicy.DID == nil {
+		t.Fatal("DID constraints not found")
+	}
+	if len(issuerPolicy.DID.AllowedDomains) != 1 {
+		t.Errorf("DID AllowedDomains count = %v, want %v", len(issuerPolicy.DID.AllowedDomains), 1)
+	}
+	if !issuerPolicy.DID.RequireVerifiableHistory {
+		t.Error("DID RequireVerifiableHistory should be true")
+	}
+
+	// Verify credential-verifier policy
+	verifierPolicy := cfg.Policies.Policies["credential-verifier"]
+	if verifierPolicy == nil {
+		t.Fatal("credential-verifier policy not found")
+	}
+	if len(verifierPolicy.Registries) != 2 {
+		t.Errorf("Registries count = %v, want %v", len(verifierPolicy.Registries), 2)
+	}
+	if verifierPolicy.Constraints == nil {
+		t.Fatal("Constraints not found")
+	}
+	if !verifierPolicy.Constraints.RequireKeyBinding {
+		t.Error("RequireKeyBinding should be true")
+	}
+	if len(verifierPolicy.Constraints.AllowedKeyTypes) != 2 {
+		t.Errorf("AllowedKeyTypes count = %v, want %v", len(verifierPolicy.Constraints.AllowedKeyTypes), 2)
+	}
+
+	// Verify mdl-issuer policy
+	mdlPolicy := cfg.Policies.Policies["mdl-issuer"]
+	if mdlPolicy == nil {
+		t.Fatal("mdl-issuer policy not found")
+	}
+	if mdlPolicy.MDOCIACA == nil {
+		t.Fatal("MDOCIACA constraints not found")
+	}
+	if len(mdlPolicy.MDOCIACA.IssuerAllowlist) != 1 {
+		t.Errorf("MDOCIACA IssuerAllowlist count = %v, want %v", len(mdlPolicy.MDOCIACA.IssuerAllowlist), 1)
+	}
+	if !mdlPolicy.MDOCIACA.RequireIACAEndpoint {
+		t.Error("MDOCIACA RequireIACAEndpoint should be true")
+	}
+}

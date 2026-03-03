@@ -258,6 +258,11 @@ func main() {
 			logging.F("valid", "whitelist, always-trusted, never-trusted"))
 	}
 
+	// Configure policies from config file
+	if cfg != nil && cfg.Policies.Policies != nil {
+		configurePoliciesFromConfig(cfg, registryMgr, logger)
+	}
+
 	serverCtx.RegistryManager = registryMgr
 
 	// Set BaseURL for .well-known discovery
@@ -546,6 +551,91 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 		registryMgr.Register(mdocReg)
 		logger.Info("mDOC IACA registry registered from config",
 			logging.F("issuer_allowlist", len(mdocCfg.IssuerAllowlist)))
+	}
+}
+
+// configurePoliciesFromConfig configures trust policies from the loaded config file.
+func configurePoliciesFromConfig(cfg *config.Config, registryMgr *registry.RegistryManager, logger logging.Logger) {
+	policyMgr := registry.NewPolicyManager()
+	policyCount := 0
+
+	for name, policyCfg := range cfg.Policies.Policies {
+		policy := &registry.Policy{
+			Name:        name,
+			Description: policyCfg.Description,
+			Registries:  policyCfg.Registries,
+		}
+
+		// Convert constraints
+		if policyCfg.Constraints != nil {
+			policy.Constraints = registry.PolicyConstraints{
+				RequireKeyBinding: policyCfg.Constraints.RequireKeyBinding,
+				AllowedKeyTypes:   policyCfg.Constraints.AllowedKeyTypes,
+			}
+		}
+
+		// Convert ETSI constraints
+		if policyCfg.ETSI != nil {
+			policy.ETSI = &registry.ETSIPolicyConstraints{
+				ServiceTypes:    policyCfg.ETSI.ServiceTypes,
+				ServiceStatuses: policyCfg.ETSI.ServiceStatuses,
+				Countries:       policyCfg.ETSI.Countries,
+			}
+		}
+
+		// Convert OpenID Federation constraints
+		if policyCfg.OIDFed != nil {
+			policy.OIDFed = &registry.OIDFedPolicyConstraints{
+				RequiredTrustMarks: policyCfg.OIDFed.RequiredTrustMarks,
+				EntityTypes:        policyCfg.OIDFed.EntityTypes,
+				MaxChainDepth:      policyCfg.OIDFed.MaxChainDepth,
+			}
+		}
+
+		// Convert DID constraints
+		if policyCfg.DID != nil {
+			policy.DID = &registry.DIDPolicyConstraints{
+				AllowedDomains:              policyCfg.DID.AllowedDomains,
+				RequiredVerificationMethods: policyCfg.DID.RequiredVerificationMethods,
+				RequiredServices:            policyCfg.DID.RequiredServices,
+				RequireVerifiableHistory:    policyCfg.DID.RequireVerifiableHistory,
+			}
+		}
+
+		// Convert mDOC IACA constraints
+		if policyCfg.MDOCIACA != nil {
+			policy.MDOCIACA = &registry.MDOCIACAPolicyConstraints{
+				IssuerAllowlist:     policyCfg.MDOCIACA.IssuerAllowlist,
+				RequireIACAEndpoint: policyCfg.MDOCIACA.RequireIACAEndpoint,
+			}
+		}
+
+		policyMgr.RegisterPolicy(policy)
+		policyCount++
+
+		logger.Debug("Registered policy from config",
+			logging.F("name", name),
+			logging.F("description", policyCfg.Description))
+	}
+
+	// Set default policy if specified
+	if cfg.Policies.DefaultPolicy != "" {
+		defaultPolicy := policyMgr.GetPolicy(cfg.Policies.DefaultPolicy)
+		if defaultPolicy != nil {
+			policyMgr.SetDefaultPolicy(defaultPolicy)
+			logger.Info("Default policy set from config",
+				logging.F("policy", cfg.Policies.DefaultPolicy))
+		} else {
+			logger.Warn("Default policy not found in policies",
+				logging.F("policy", cfg.Policies.DefaultPolicy))
+		}
+	}
+
+	if policyCount > 0 {
+		registryMgr.SetPolicyManager(policyMgr)
+		logger.Info("Trust policies configured from config file",
+			logging.F("count", policyCount),
+			logging.F("policies", policyMgr.ListPolicies()))
 	}
 }
 

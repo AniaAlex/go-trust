@@ -21,6 +21,7 @@ type Config struct {
 	Pipeline   PipelineConfig   `yaml:"pipeline"`
 	Security   SecurityConfig   `yaml:"security"`
 	Registries RegistriesConfig `yaml:"registries"`
+	Policies   PoliciesConfig   `yaml:"policies,omitempty"`
 }
 
 // RegistriesConfig contains configuration for all trust registries.
@@ -122,6 +123,103 @@ type MDOCIACARegistryConfig struct {
 	IssuerAllowlist []string `yaml:"issuer_allowlist,omitempty"`
 	CacheTTL        string   `yaml:"cache_ttl,omitempty"`
 	HTTPTimeout     string   `yaml:"http_timeout,omitempty"`
+}
+
+// =============================================================================
+// Policy Configuration
+// =============================================================================
+
+// PoliciesConfig contains trust policy configuration.
+// Policies map action.name values to specific trust constraints.
+type PoliciesConfig struct {
+	// DefaultPolicy is the name of the policy to use when action.name is not specified
+	DefaultPolicy string `yaml:"default_policy,omitempty"`
+
+	// Policies is a map of policy name to policy configuration
+	Policies map[string]*PolicyConfig `yaml:"policies,omitempty"`
+}
+
+// PolicyConfig defines a trust evaluation policy.
+type PolicyConfig struct {
+	// Description provides human-readable documentation
+	Description string `yaml:"description,omitempty"`
+
+	// Registries limits evaluation to specific registry names.
+	// If empty, all registries are considered.
+	Registries []string `yaml:"registries,omitempty"`
+
+	// Constraints contains registry-agnostic constraints
+	Constraints *PolicyConstraintsConfig `yaml:"constraints,omitempty"`
+
+	// OIDFed contains OpenID Federation-specific constraints
+	OIDFed *OIDFedPolicyConfig `yaml:"oidfed,omitempty"`
+
+	// ETSI contains ETSI TSL-specific constraints
+	ETSI *ETSIPolicyConfig `yaml:"etsi,omitempty"`
+
+	// DID contains DID method-specific constraints (did:web, did:webvh)
+	DID *DIDPolicyConfig `yaml:"did,omitempty"`
+
+	// MDOCIACA contains mDOC IACA-specific constraints
+	MDOCIACA *MDOCIACAPolicyConfig `yaml:"mdociaca,omitempty"`
+}
+
+// PolicyConstraintsConfig contains registry-agnostic trust constraints.
+type PolicyConstraintsConfig struct {
+	// RequireKeyBinding requires that a key be provided and validated.
+	RequireKeyBinding bool `yaml:"require_key_binding,omitempty"`
+
+	// AllowedKeyTypes restricts accepted key types (e.g., ["x5c", "jwk"])
+	AllowedKeyTypes []string `yaml:"allowed_key_types,omitempty"`
+}
+
+// OIDFedPolicyConfig contains OpenID Federation-specific policy constraints.
+type OIDFedPolicyConfig struct {
+	// RequiredTrustMarks specifies trust mark types that MUST be present
+	RequiredTrustMarks []string `yaml:"required_trust_marks,omitempty"`
+
+	// EntityTypes filters by OpenID Federation entity types
+	EntityTypes []string `yaml:"entity_types,omitempty"`
+
+	// MaxChainDepth limits trust chain resolution depth
+	MaxChainDepth int `yaml:"max_chain_depth,omitempty"`
+}
+
+// ETSIPolicyConfig contains ETSI TSL-specific policy constraints.
+type ETSIPolicyConfig struct {
+	// ServiceTypes filters by ETSI service type URIs
+	ServiceTypes []string `yaml:"service_types,omitempty"`
+
+	// ServiceStatuses filters by ETSI service status URIs
+	ServiceStatuses []string `yaml:"service_statuses,omitempty"`
+
+	// Countries filters by country codes (e.g., ["DE", "FR"])
+	Countries []string `yaml:"countries,omitempty"`
+}
+
+// DIDPolicyConfig contains DID method-specific policy constraints.
+type DIDPolicyConfig struct {
+	// AllowedDomains restricts DIDs to specific domains.
+	// Supports wildcards: "*.example.com" matches "sub.example.com"
+	AllowedDomains []string `yaml:"allowed_domains,omitempty"`
+
+	// RequiredVerificationMethods requires specific verification method types.
+	RequiredVerificationMethods []string `yaml:"required_verification_methods,omitempty"`
+
+	// RequiredServices requires specific service types in the DID document.
+	RequiredServices []string `yaml:"required_services,omitempty"`
+
+	// RequireVerifiableHistory (did:webvh only) requires valid verifiable history.
+	RequireVerifiableHistory bool `yaml:"require_verifiable_history,omitempty"`
+}
+
+// MDOCIACAPolicyConfig contains mDOC IACA-specific policy constraints.
+type MDOCIACAPolicyConfig struct {
+	// IssuerAllowlist restricts to specific credential issuers.
+	IssuerAllowlist []string `yaml:"issuer_allowlist,omitempty"`
+
+	// RequireIACAEndpoint requires the issuer to publish mdoc_iacas_uri.
+	RequireIACAEndpoint bool `yaml:"require_iaca_endpoint,omitempty"`
 }
 
 // ServerConfig contains HTTP server configuration settings.
