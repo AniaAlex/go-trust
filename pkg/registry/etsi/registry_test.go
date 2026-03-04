@@ -250,12 +250,13 @@ func TestTSLRegistry_SupportedResourceTypes(t *testing.T) {
 	}
 
 	types := reg.SupportedResourceTypes()
-	if len(types) != 2 {
-		t.Errorf("expected 2 supported types, got %d", len(types))
+	if len(types) != 3 {
+		t.Errorf("expected 3 supported types, got %d", len(types))
 	}
 
 	foundX5C := false
 	foundJWK := false
+	foundX509SanDNS := false
 	for _, typ := range types {
 		if typ == "x5c" {
 			foundX5C = true
@@ -263,12 +264,18 @@ func TestTSLRegistry_SupportedResourceTypes(t *testing.T) {
 		if typ == "jwk" {
 			foundJWK = true
 		}
+		if typ == "x509_san_dns" {
+			foundX509SanDNS = true
+		}
 	}
 	if !foundX5C {
 		t.Error("expected x5c in supported types")
 	}
 	if !foundJWK {
 		t.Error("expected jwk in supported types")
+	}
+	if !foundX509SanDNS {
+		t.Error("expected x509_san_dns in supported types")
 	}
 }
 
@@ -1215,5 +1222,220 @@ func TestTSLRegistry_TSLCount_WithMultipleFiles(t *testing.T) {
 	// Should have 2 TSLs (same file loaded twice)
 	if reg.TSLCount() != 2 {
 		t.Errorf("expected 2 TSLs, got %d", reg.TSLCount())
+	}
+}
+
+// generateTestCertificateWithDNSSAN creates a self-signed test certificate with DNS SANs
+func generateTestCertificateWithDNSSAN(t *testing.T, cn string, dnsNames []string) (*x509.Certificate, []byte) {
+	t.Helper()
+
+	// Generate RSA key
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+
+	// Create certificate template with DNS SANs
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName:   cn,
+			Organization: []string{"Test Organization"},
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		DNSNames:              dnsNames,
+	}
+
+	// Create self-signed certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+
+	// Parse the DER certificate back
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("failed to parse certificate: %v", err)
+	}
+
+	// Encode to PEM
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certDER,
+	})
+
+	return cert, pemBytes
+}
+
+// TestTSLRegistry_Evaluate_X509SanDNS tests x509_san_dns resource type validation
+func TestTSLRegistry_Evaluate_X509SanDNS(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-x509-san-dns-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate with DNS SANs
+	dnsNames := []string{"example.com", "www.example.com", "wallet.example.org"}
+	cert, pemData := generateTestCertificateWithDNSSAN(t, "Test CA", dnsNames)
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	// Create registry with this certificate as trust anchor
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "x509-san-dns-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Encode certificate as base64 for x5c array
+	certB64 := base64.StdEncoding.EncodeToString(cert.Raw)
+
+	tests := []struct {
+		name        string
+		subjectID   string
+		expectAllow bool
+		expectError string
+	}{
+		{
+			name:        "matching DNS SAN - exact match",
+			subjectID:   "example.com",
+			expectAllow: true,
+		},
+		{
+			name:        "matching DNS SAN - www subdomain",
+			subjectID:   "www.example.com",
+			expectAllow: true,
+		},
+		{
+			name:        "matching DNS SAN - different domain",
+			subjectID:   "wallet.example.org",
+			expectAllow: true,
+		},
+		{
+			name:        "non-matching DNS",
+			subjectID:   "attacker.com",
+			expectAllow: false,
+			expectError: "not found in certificate DNS SANs",
+		},
+		{
+			name:        "partial match should fail",
+			subjectID:   "example",
+			expectAllow: false,
+			expectError: "not found in certificate DNS SANs",
+		},
+		{
+			name:        "subdomain not in SAN should fail",
+			subjectID:   "api.example.com",
+			expectAllow: false,
+			expectError: "not found in certificate DNS SANs",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &authzen.EvaluationRequest{
+				Subject: authzen.Subject{
+					Type: "key",
+					ID:   tc.subjectID,
+				},
+				Resource: authzen.Resource{
+					Type: "x509_san_dns",
+					ID:   tc.subjectID,
+					Key:  []interface{}{certB64},
+				},
+			}
+
+			resp, err := reg.Evaluate(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if resp.Decision != tc.expectAllow {
+				t.Errorf("expected decision=%v, got %v", tc.expectAllow, resp.Decision)
+				if resp.Context != nil && resp.Context.Reason != nil {
+					t.Logf("reason: %v", resp.Context.Reason)
+				}
+			}
+
+			if tc.expectError != "" && resp.Decision == false {
+				if resp.Context == nil || resp.Context.Reason == nil {
+					t.Error("expected error in reason but got nil context")
+				} else if errMsg, ok := resp.Context.Reason["error"].(string); ok {
+					if !strings.Contains(errMsg, tc.expectError) {
+						t.Errorf("expected error to contain %q, got %q", tc.expectError, errMsg)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestTSLRegistry_Evaluate_X509SanDNS_NoDNSSANs tests x509_san_dns with certificate without DNS SANs
+func TestTSLRegistry_Evaluate_X509SanDNS_NoDNSSANs(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-x509-san-dns-no-san-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate WITHOUT DNS SANs
+	cert, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	// Create registry with this certificate as trust anchor
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "x509-san-dns-no-san-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Encode certificate as base64 for x5c array
+	certB64 := base64.StdEncoding.EncodeToString(cert.Raw)
+
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "example.com",
+		},
+		Resource: authzen.Resource{
+			Type: "x509_san_dns",
+			ID:   "example.com",
+			Key:  []interface{}{certB64},
+		},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should fail because there are no DNS SANs in the certificate
+	if resp.Decision != false {
+		t.Error("expected decision=false for certificate without DNS SANs")
+	}
+
+	if resp.Context != nil && resp.Context.Reason != nil {
+		if errMsg, ok := resp.Context.Reason["error"].(string); ok {
+			if !strings.Contains(errMsg, "not found in certificate DNS SANs") {
+				t.Errorf("expected error about DNS SANs, got: %s", errMsg)
+			}
+		}
+		// Verify the response includes the empty DNS SANs list
+		if dnsSans, ok := resp.Context.Reason["dns_sans"].([]string); ok {
+			if len(dnsSans) != 0 {
+				t.Errorf("expected empty dns_sans, got %v", dnsSans)
+			}
+		}
 	}
 }

@@ -447,7 +447,7 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 	var parseErr error
 
 	switch req.Resource.Type {
-	case "x5c":
+	case "x5c", "x509_san_dns":
 		certs, parseErr = x509util.ParseX5CFromArray(req.Resource.Key)
 	case "jwk":
 		certs, parseErr = x509util.ParseX5CFromJWK(req.Resource.Key)
@@ -456,7 +456,7 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 			Decision: false,
 			Context: &authzen.EvaluationResponseContext{
 				Reason: map[string]interface{}{
-					"error": fmt.Sprintf("unsupported resource type: %s (expected x5c or jwk)", req.Resource.Type),
+					"error": fmt.Sprintf("unsupported resource type: %s (expected x5c, jwk, or x509_san_dns)", req.Resource.Type),
 				},
 			},
 		}, nil
@@ -515,6 +515,34 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 		}, nil
 	}
 
+	// For x509_san_dns, additionally verify that Subject.ID matches a DNS SAN in the leaf certificate
+	// This implements OpenID4VP section 5.9.3 client_id verification
+	if req.Resource.Type == "x509_san_dns" {
+		clientID := req.Subject.ID
+		leafCert := certs[0]
+		sanMatched := false
+
+		for _, dnsName := range leafCert.DNSNames {
+			if dnsName == clientID {
+				sanMatched = true
+				break
+			}
+		}
+
+		if !sanMatched {
+			return &authzen.EvaluationResponse{
+				Decision: false,
+				Context: &authzen.EvaluationResponseContext{
+					Reason: map[string]interface{}{
+						"error":         fmt.Sprintf("subject.id '%s' not found in certificate DNS SANs", clientID),
+						"dns_sans":      leafCert.DNSNames,
+						"validation_ms": validationDuration.Milliseconds(),
+					},
+				},
+			}, nil
+		}
+	}
+
 	// Success - certificate is trusted
 	return &authzen.EvaluationResponse{
 		Decision: true,
@@ -531,8 +559,12 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 }
 
 // SupportedResourceTypes returns the resource types this registry can handle.
+// Supports:
+// - x5c: X.509 certificate chain (validates chain against TSL)
+// - jwk: JWK with x5c claim (validates chain against TSL)
+// - x509_san_dns: OpenID4VP client_id type where Subject.ID must match a DNS SAN in the certificate
 func (r *TSLRegistry) SupportedResourceTypes() []string {
-	return []string{"x5c", "jwk"}
+	return []string{"x5c", "jwk", "x509_san_dns"}
 }
 
 // SupportsResolutionOnly returns false - ETSI TSL requires certificate validation.
