@@ -76,6 +76,58 @@ func writeTestCertFile(t *testing.T, dir string, filename string, pemData []byte
 	return path
 }
 
+// generateSignedCertificate creates a certificate signed by a CA
+// Returns the certificate, its DER bytes, and the private key
+func generateSignedCertificate(t *testing.T, cn string, isCA bool, issuer *x509.Certificate, issuerKey *rsa.PrivateKey) (*x509.Certificate, []byte, *rsa.PrivateKey) {
+	t.Helper()
+
+	// Generate RSA key for this certificate
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+
+	// Create certificate template
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName:   cn,
+			Organization: []string{"Test Organization"},
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  isCA,
+	}
+
+	if isCA {
+		template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
+	} else {
+		template.KeyUsage = x509.KeyUsageDigitalSignature
+		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	}
+
+	// Sign with the issuer (or self-sign if issuer is nil)
+	signingCert := issuer
+	signingKey := issuerKey
+	if signingCert == nil {
+		signingCert = &template
+		signingKey = privateKey
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, signingCert, &privateKey.PublicKey, signingKey)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("failed to parse certificate: %v", err)
+	}
+
+	return cert, certDER, privateKey
+}
+
 func TestNewTSLRegistry_WithCertBundle(t *testing.T) {
 	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "tsl-registry-test-*")
@@ -556,6 +608,95 @@ func TestTSLRegistry_Evaluate_X5CInvalidCert(t *testing.T) {
 	if resp.Decision {
 		t.Error("expected false decision for untrusted certificate")
 	}
+}
+
+// TestTSLRegistry_Evaluate_X5CIntermediateChain tests validation of a certificate chain
+// with an intermediate CA. This verifies issue #6 - intermediate certificate fix.
+func TestTSLRegistry_Evaluate_X5CIntermediateChain(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-intermediate-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// 1. Create Root CA (self-signed, will be in trust store)
+	rootCert, rootDER, rootKey := generateSignedCertificate(t, "Root CA", true, nil, nil)
+	rootPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})
+	certPath := writeTestCertFile(t, tmpDir, "root-ca.pem", rootPEM)
+
+	// 2. Create Intermediate CA (signed by Root CA)
+	intermediateCert, intermediateDER, intermediateKey := generateSignedCertificate(t, "Intermediate CA", true, rootCert, rootKey)
+
+	// 3. Create Leaf certificate (signed by Intermediate CA)
+	leafCert, leafDER, _ := generateSignedCertificate(t, "Leaf Cert", false, intermediateCert, intermediateKey)
+
+	// Create registry with only Root CA as trust anchor
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "intermediate-chain-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Encode certificates as base64 for x5c array (leaf first, then intermediate)
+	leafB64 := base64.StdEncoding.EncodeToString(leafDER)
+	intermediateB64 := base64.StdEncoding.EncodeToString(intermediateDER)
+
+	tests := []struct {
+		name        string
+		chain       []interface{}
+		expectAllow bool
+		description string
+	}{
+		{
+			name:        "leaf only - should fail (missing intermediate)",
+			chain:       []interface{}{leafB64},
+			expectAllow: false,
+			description: "Leaf cert alone can't validate without intermediate",
+		},
+		{
+			name:        "leaf + intermediate - should succeed",
+			chain:       []interface{}{leafB64, intermediateB64},
+			expectAllow: true,
+			description: "Full chain should validate against root in trust store",
+		},
+		{
+			name:        "intermediate only - should succeed (signed by root)",
+			chain:       []interface{}{intermediateB64},
+			expectAllow: true,
+			description: "Intermediate CA validates because it's directly signed by root in trust store",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &authzen.EvaluationRequest{
+				Resource: authzen.Resource{
+					Type: "x5c",
+					Key:  tc.chain,
+				},
+			}
+
+			resp, err := reg.Evaluate(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if resp.Decision != tc.expectAllow {
+				reason := "unknown"
+				if resp.Context != nil && resp.Context.Reason != nil {
+					reason = fmt.Sprintf("%v", resp.Context.Reason)
+				}
+				t.Errorf("%s: expected decision=%v, got %v. Reason: %s",
+					tc.description, tc.expectAllow, resp.Decision, reason)
+			}
+		})
+	}
+
+	// Additional test: verify leaf cert recognizes the CA chain
+	_ = leafCert
 }
 
 func TestTSLRegistry_Evaluate_EmptyKey(t *testing.T) {

@@ -500,6 +500,17 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 	opts := x509.VerifyOptions{
 		Roots: r.certPool,
 	}
+
+	// Add intermediate certificates if provided in the chain
+	// This is required for leaf certs signed by intermediate CAs (not directly by root)
+	if len(certs) > 1 {
+		intermediates := x509.NewCertPool()
+		for _, cert := range certs[1:] {
+			intermediates.AddCert(cert)
+		}
+		opts.Intermediates = intermediates
+	}
+
 	chains, err := certs[0].Verify(opts)
 	validationDuration := time.Since(start)
 
