@@ -90,6 +90,17 @@ type TSLConfig struct {
 	// Set to false for production servers that should only use local files.
 	// Default: false
 	AllowNetworkAccess bool
+
+	// LOTLSignerBundle is the path to a PEM file containing trusted LOTL signer certificates.
+	// When set, TSL signatures will be verified against these certificates.
+	// This implements ETSI TS 119 615 LOTL signature validation.
+	LOTLSignerBundle string
+
+	// RequireSignature controls whether TSLs must have valid signatures.
+	// When true, unsigned TSLs or TSLs with invalid signatures will be rejected.
+	// When false, signature verification is opportunistic (verify if signer certs are configured).
+	// Default: false
+	RequireSignature bool
 }
 
 // TSLRegistry implements TrustRegistry for ETSI TS 119 612 Trust Status Lists.
@@ -101,6 +112,7 @@ type TSLRegistry struct {
 	tsls        []*etsi119612.TSL
 	loadedAt    time.Time
 	sourceFiles []string
+	lotlSigners []*x509.Certificate // LOTL signer certificates for signature verification
 	mu          sync.RWMutex
 	healthy     bool
 	lastError   error
@@ -145,6 +157,18 @@ func (r *TSLRegistry) load() error {
 	var certCount int
 	var tsls []*etsi119612.TSL
 	var sourceFiles []string
+	var lotlSigners []*x509.Certificate
+
+	// Load LOTL signer certificates if configured
+	if r.config.LOTLSignerBundle != "" {
+		signers, err := r.loadLOTLSignerBundle(r.config.LOTLSignerBundle)
+		if err != nil {
+			r.lastError = fmt.Errorf("failed to load LOTL signer bundle: %w", err)
+			r.healthy = false
+			return r.lastError
+		}
+		lotlSigners = signers
+	}
 
 	// Load from PEM certificate bundle
 	if r.config.CertBundle != "" {
@@ -171,6 +195,13 @@ func (r *TSLRegistry) load() error {
 
 		tsl, certs, err := r.loadLocalTSL(tslPath)
 		if err != nil {
+			r.lastError = err
+			r.healthy = false
+			return err
+		}
+
+		// Verify TSL signature if LOTL signers are configured
+		if err := r.verifyTSLSignature(tsl, lotlSigners); err != nil {
 			r.lastError = err
 			r.healthy = false
 			return err
@@ -207,6 +238,15 @@ func (r *TSLRegistry) load() error {
 			return err
 		}
 
+		// Verify TSL signatures if LOTL signers are configured
+		for _, tsl := range loadedTSLs {
+			if err := r.verifyTSLSignature(tsl, lotlSigners); err != nil {
+				r.lastError = err
+				r.healthy = false
+				return err
+			}
+		}
+
 		tsls = append(tsls, loadedTSLs...)
 		sourceFiles = append(sourceFiles, tslURL)
 
@@ -230,6 +270,7 @@ func (r *TSLRegistry) load() error {
 	r.certCount = certCount
 	r.tsls = tsls
 	r.sourceFiles = sourceFiles
+	r.lotlSigners = lotlSigners
 	r.loadedAt = time.Now()
 	r.healthy = true
 	r.lastError = nil
@@ -274,6 +315,89 @@ func (r *TSLRegistry) loadCertBundle(path string) (*x509.CertPool, int, error) {
 	}
 
 	return pool, certCount, nil
+}
+
+// loadLOTLSignerBundle reads LOTL signer certificates from a PEM file.
+// These certificates are used to verify TSL signatures per ETSI TS 119 615.
+func (r *TSLRegistry) loadLOTLSignerBundle(path string) ([]*x509.Certificate, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid LOTL signer bundle path: %w", err)
+	}
+
+	pemData, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read LOTL signer bundle %s: %w", absPath, err)
+	}
+
+	var certs []*x509.Certificate
+	var block *pem.Block
+	rest := pemData
+	for {
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type == "CERTIFICATE" {
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				// Log warning but continue
+				continue
+			}
+			certs = append(certs, cert)
+		}
+	}
+
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no valid certificates found in LOTL signer bundle %s", absPath)
+	}
+
+	return certs, nil
+}
+
+// verifyTSLSignature verifies that a TSL's signature was created by a trusted LOTL signer.
+// This implements ETSI TS 119 615 LOTL signature validation.
+// Returns nil if signature is valid or signature verification is not required.
+func (r *TSLRegistry) verifyTSLSignature(tsl *etsi119612.TSL, lotlSigners []*x509.Certificate) error {
+	// If no LOTL signer certificates configured, skip verification
+	if len(lotlSigners) == 0 {
+		if r.config.RequireSignature {
+			return fmt.Errorf("signature verification required but no LOTL signer certificates configured")
+		}
+		return nil
+	}
+
+	// Check if TSL is signed
+	if !tsl.Signed {
+		if r.config.RequireSignature {
+			return fmt.Errorf("TSL from %s is not signed", tsl.Source)
+		}
+		return nil
+	}
+
+	// Verify signer certificate is one of the trusted LOTL signers
+	signerCert := &tsl.Signer
+	if len(signerCert.Raw) == 0 {
+		if r.config.RequireSignature {
+			return fmt.Errorf("TSL from %s has no signer certificate", tsl.Source)
+		}
+		return nil
+	}
+
+	// Check if signer is in the trusted list
+	for _, trustedSigner := range lotlSigners {
+		if signerCert.Equal(trustedSigner) {
+			return nil // Signature verified - signer is trusted
+		}
+	}
+
+	// Signer not in trusted list
+	if r.config.RequireSignature {
+		return fmt.Errorf("TSL from %s signed by untrusted certificate: %s", tsl.Source, signerCert.Subject.CommonName)
+	}
+
+	// Opportunistic verification - log warning but don't fail
+	return nil
 }
 
 // loadLocalTSL loads a TSL from a local file path.

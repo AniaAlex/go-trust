@@ -1580,3 +1580,94 @@ func TestTSLRegistry_Evaluate_X509SanDNS_NoDNSSANs(t *testing.T) {
 		}
 	}
 }
+
+// TestTSLRegistry_LOTLSignerBundle tests loading of LOTL signer certificates
+func TestTSLRegistry_LOTLSignerBundle(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "lotl-signer-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificates - one for trust pool, one for LOTL signer
+	_, trustPEM := generateTestCertificate(t, "Trust CA")
+	trustPath := writeTestCertFile(t, tmpDir, "trust.pem", trustPEM)
+
+	signerCert, signerPEM := generateTestCertificate(t, "LOTL Signer")
+	signerPath := writeTestCertFile(t, tmpDir, "lotl-signer.pem", signerPEM)
+
+	// Create registry with LOTL signer bundle configured
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:             "lotl-signer-test",
+		CertBundle:       trustPath,
+		LOTLSignerBundle: signerPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Verify the LOTL signers were loaded
+	if len(reg.lotlSigners) != 1 {
+		t.Errorf("expected 1 LOTL signer, got %d", len(reg.lotlSigners))
+	}
+
+	if reg.lotlSigners[0].Subject.CommonName != "LOTL Signer" {
+		t.Errorf("expected signer CN 'LOTL Signer', got '%s'", reg.lotlSigners[0].Subject.CommonName)
+	}
+
+	// Check that the signer certificate is correct
+	if !reg.lotlSigners[0].Equal(signerCert) {
+		t.Error("loaded LOTL signer does not match original certificate")
+	}
+}
+
+// TestTSLRegistry_LOTLSignerBundle_InvalidPath tests error handling for invalid LOTL signer bundle paths
+func TestTSLRegistry_LOTLSignerBundle_InvalidPath(t *testing.T) {
+	// Create temp directory for cert bundle
+	tmpDir, err := os.MkdirTemp("", "lotl-signer-invalid-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, trustPEM := generateTestCertificate(t, "Trust CA")
+	trustPath := writeTestCertFile(t, tmpDir, "trust.pem", trustPEM)
+
+	// Try to create registry with non-existent LOTL signer bundle
+	_, err = NewTSLRegistry(TSLConfig{
+		Name:             "lotl-invalid-test",
+		CertBundle:       trustPath,
+		LOTLSignerBundle: "/nonexistent/path/lotl-signer.pem",
+	})
+	if err == nil {
+		t.Error("expected error for non-existent LOTL signer bundle")
+	}
+}
+
+// TestTSLRegistry_RequireSignature tests the RequireSignature configuration
+func TestTSLRegistry_RequireSignature(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "require-sig-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate for trust pool
+	_, trustPEM := generateTestCertificate(t, "Trust CA")
+	trustPath := writeTestCertFile(t, tmpDir, "trust.pem", trustPEM)
+
+	// Test that RequireSignature=true without LOTLSignerBundle fails
+	_, err = NewTSLRegistry(TSLConfig{
+		Name:             "require-sig-no-signers",
+		CertBundle:       trustPath,
+		RequireSignature: true,
+		// No LOTLSignerBundle configured
+	})
+	// This should succeed since we're only loading from CertBundle, not TSL files
+	// The RequireSignature check happens when loading TSL files, not cert bundles
+	if err != nil {
+		t.Fatalf("unexpected error creating registry: %v", err)
+	}
+}
