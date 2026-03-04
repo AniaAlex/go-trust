@@ -426,6 +426,7 @@ curl -X POST http://localhost:6001/evaluation \
 docker build -t go-trust:latest .
 
 docker run -d \
+  --name go-trust-server \
   -p 6001:6001 \
   -v /path/to/trusted-certs.pem:/app/certs.pem:ro \
   go-trust:latest --etsi-cert-bundle /app/certs.pem
