@@ -38,7 +38,6 @@ func StatusHandler(serverCtx *ServerContext) gin.HandlerFunc {
 
 		c.JSON(200, gin.H{
 			"registry_count": tslCount,
-			"last_processed": serverCtx.LastProcessed.Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
 }
@@ -250,7 +249,6 @@ func TSLsHandler(serverCtx *ServerContext) gin.HandlerFunc {
 
 		registryInfos := make([]map[string]interface{}, 0)
 		registryCount := 0
-		lastUpdated := serverCtx.LastProcessed.Format(time.RFC3339)
 
 		if serverCtx.RegistryManager != nil {
 			for _, info := range serverCtx.RegistryManager.ListRegistries() {
@@ -272,9 +270,8 @@ func TSLsHandler(serverCtx *ServerContext) gin.HandlerFunc {
 			logging.F("registry_count", registryCount))
 
 		c.JSON(200, gin.H{
-			"count":        registryCount,
-			"last_updated": lastUpdated,
-			"registries":   registryInfos,
+			"count":      registryCount,
+			"registries": registryInfos,
 		})
 	}
 }

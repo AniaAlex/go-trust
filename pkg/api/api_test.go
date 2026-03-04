@@ -94,7 +94,6 @@ func setupTestServer() (*gin.Engine, *ServerContext) {
 
 	serverCtx := &ServerContext{
 		RegistryManager: mgr,
-		LastProcessed:   time.Now(),
 		Logger:          logging.DefaultLogger(),
 		BaseURL:         "http://localhost:6001",
 	}
@@ -213,7 +212,6 @@ func TestStatusEndpoint(t *testing.T) {
 
 	assert.Equal(t, 200, w.Code)
 	assert.Contains(t, w.Body.String(), "registry_count")
-	assert.Contains(t, w.Body.String(), "last_processed")
 }
 
 func TestInfoEndpoint_Empty(t *testing.T) {
@@ -365,7 +363,6 @@ func TestAuthzenDecisionEndpoint_Errors(t *testing.T) {
 	mgr2.Register(mockReg2)
 	serverCtx2 := &ServerContext{
 		RegistryManager: mgr2,
-		LastProcessed:   time.Now(),
 		Logger:          logging.DefaultLogger(),
 		BaseURL:         "http://localhost:6001",
 	}
@@ -387,28 +384,6 @@ func TestAuthzenDecisionEndpoint_Errors(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "\"decision\":false") {
 		t.Errorf("Expected decision:false for cert verification failure, got %s", w.Body.String())
 	}
-}
-
-func TestStartBackgroundRefresher(t *testing.T) {
-	// Create a test server context
-	gin.SetMode(gin.TestMode)
-	mgr := registry.NewRegistryManager(registry.FirstMatch, 10*time.Second)
-	mockReg := &mockTrustRegistry{certPool: x509.NewCertPool()}
-	mgr.Register(mockReg)
-	serverCtx := &ServerContext{
-		RegistryManager: mgr,
-		Logger:          logging.DefaultLogger(),
-	}
-	interval := 10 * time.Millisecond
-	err := StartBackgroundRefresher(serverCtx, interval)
-	assert.NoError(t, err)
-
-	// Wait for the refresher to run at least once
-	time.Sleep(30 * time.Millisecond)
-
-	serverCtx.RLock()
-	defer serverCtx.RUnlock()
-	assert.False(t, serverCtx.LastProcessed.IsZero(), "LastProcessed should be set after refresh")
 }
 
 func TestBuildResponse(t *testing.T) {
@@ -761,7 +736,6 @@ func TestNewServerContext_DefaultValues(t *testing.T) {
 	serverCtx := NewServerContext(logger)
 
 	assert.NotNil(t, serverCtx.Logger)
-	assert.NotNil(t, serverCtx.LastProcessed)
 }
 
 // TestLegacyEvaluate tests the legacy evaluation path (when RegistryManager is nil)

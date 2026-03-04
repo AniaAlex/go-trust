@@ -55,9 +55,6 @@
 //	registryMgr := registry.NewRegistryManager(logger, strategy)
 //	registryMgr.Register(tslRegistry)
 //
-//	// Background refresher keeps registries updated
-//	api.StartBackgroundRefresher(serverCtx, 5*time.Minute)
-//
 // # AuthZEN Integration
 //
 // The registry supports the following resource types:

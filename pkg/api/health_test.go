@@ -47,8 +47,8 @@ func (m *mockRegistry) Healthy() bool {
 	return m.healthy
 }
 
-// createTestContext creates a ServerContext with the specified number of registries and last processed time
-func createTestContext(registryCount int, lastProcessed time.Time) *ServerContext {
+// createTestContext creates a ServerContext with the specified number of registries
+func createTestContext(registryCount int, healthy bool) *ServerContext {
 	logger := logging.DefaultLogger()
 	mgr := registry.NewRegistryManager(registry.FirstMatch, 10*time.Second)
 
@@ -56,14 +56,13 @@ func createTestContext(registryCount int, lastProcessed time.Time) *ServerContex
 	for i := 0; i < registryCount; i++ {
 		mgr.Register(&mockRegistry{
 			name:          "mock-registry",
-			healthy:       true,
+			healthy:       healthy,
 			resourceTypes: []string{"x5c", "jwk"},
 		})
 	}
 
 	return &ServerContext{
 		RegistryManager: mgr,
-		LastProcessed:   lastProcessed,
 		Logger:          logger,
 	}
 }
@@ -71,7 +70,7 @@ func createTestContext(registryCount int, lastProcessed time.Time) *ServerContex
 func TestHealthEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ctx := createTestContext(5, time.Now().Add(-5*time.Minute))
+	ctx := createTestContext(5, true)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -92,7 +91,7 @@ func TestHealthEndpoint(t *testing.T) {
 func TestHealthzEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ctx := createTestContext(0, time.Time{})
+	ctx := createTestContext(0, false)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -112,8 +111,7 @@ func TestHealthzEndpoint(t *testing.T) {
 func TestReadyEndpoint_Ready(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	now := time.Now()
-	ctx := createTestContext(3, now)
+	ctx := createTestContext(3, true)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -122,7 +120,7 @@ func TestReadyEndpoint_Ready(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code, "Ready endpoint should return 200 OK when TSLs are loaded")
+	assert.Equal(t, http.StatusOK, w.Code, "Ready endpoint should return 200 OK when registries are healthy")
 
 	var response ReadinessResponse
 	err := json.Unmarshal(w.Body.Bytes(), &response)
@@ -130,8 +128,8 @@ func TestReadyEndpoint_Ready(t *testing.T) {
 
 	assert.Equal(t, "ready", response.Status)
 	assert.True(t, response.Ready, "Service should be ready")
-	assert.Equal(t, 3, response.TSLCount)
-	assert.Equal(t, now.Format(time.RFC3339), response.LastProcessed)
+	assert.Equal(t, 3, response.RegistryCount)
+	assert.Equal(t, 3, response.HealthyCount)
 	assert.NotEmpty(t, response.Message, "Should have message when ready")
 	assert.Contains(t, response.Message, "ready to accept traffic", "Message should be positive")
 }
@@ -139,7 +137,7 @@ func TestReadyEndpoint_Ready(t *testing.T) {
 func TestReadyEndpoint_NotReady_NoTSLs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ctx := createTestContext(0, time.Time{})
+	ctx := createTestContext(0, false)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -156,15 +154,15 @@ func TestReadyEndpoint_NotReady_NoTSLs(t *testing.T) {
 
 	assert.Equal(t, "not_ready", response.Status)
 	assert.False(t, response.Ready, "Service should not be ready")
-	assert.Equal(t, 0, response.TSLCount)
+	assert.Equal(t, 0, response.RegistryCount)
 	assert.NotEmpty(t, response.Message, "Should have message explaining why not ready")
-	assert.Contains(t, response.Message, "Registries have not been refreshed yet", "Message should mention registries not refreshed")
+	assert.Contains(t, response.Message, "No registries configured", "Message should mention no registries")
 }
 
-func TestReadyEndpoint_NotReady_NotProcessed(t *testing.T) {
+func TestReadyEndpoint_NotReady_UnhealthyRegistries(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ctx := createTestContext(5, time.Time{}) // Zero time = never processed
+	ctx := createTestContext(5, false) // 5 unhealthy registries
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -173,7 +171,7 @@ func TestReadyEndpoint_NotReady_NotProcessed(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "Ready endpoint should return 503 when registries not refreshed")
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "Ready endpoint should return 503 when registries are unhealthy")
 
 	var response ReadinessResponse
 	err := json.Unmarshal(w.Body.Bytes(), &response)
@@ -181,15 +179,16 @@ func TestReadyEndpoint_NotReady_NotProcessed(t *testing.T) {
 
 	assert.Equal(t, "not_ready", response.Status)
 	assert.False(t, response.Ready, "Service should not be ready")
-	assert.Equal(t, 5, response.TSLCount)
+	assert.Equal(t, 5, response.RegistryCount)
+	assert.Equal(t, 0, response.HealthyCount)
 	assert.NotEmpty(t, response.Message, "Should have message explaining why not ready")
-	assert.Contains(t, response.Message, "Registries have not been refreshed yet", "Message should mention registries not refreshed")
+	assert.Contains(t, response.Message, "No healthy registries", "Message should mention unhealthy registries")
 }
 
 func TestReadinessEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ctx := createTestContext(10, time.Now())
+	ctx := createTestContext(10, true)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -206,13 +205,13 @@ func TestReadinessEndpoint(t *testing.T) {
 
 	assert.Equal(t, "ready", response.Status)
 	assert.True(t, response.Ready)
-	assert.Equal(t, 10, response.TSLCount)
+	assert.Equal(t, 10, response.RegistryCount)
 }
 
 func TestRegisterHealthEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ctx := createTestContext(1, time.Now())
+	ctx := createTestContext(1, true)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -243,7 +242,7 @@ func TestRegisterHealthEndpoints(t *testing.T) {
 func TestHealthEndpoint_Concurrent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ctx := createTestContext(5, time.Now())
+	ctx := createTestContext(5, true)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -269,7 +268,7 @@ func TestHealthEndpoint_Concurrent(t *testing.T) {
 func TestReadyEndpoint_Concurrent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ctx := createTestContext(5, time.Now())
+	ctx := createTestContext(5, true)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -311,8 +310,7 @@ func TestHealthResponse_JSONFormat(t *testing.T) {
 func TestReadyzEndpoint_Verbose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	now := time.Now()
-	ctx := createTestContext(3, now)
+	ctx := createTestContext(3, true)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -329,16 +327,15 @@ func TestReadyzEndpoint_Verbose(t *testing.T) {
 
 	assert.Equal(t, "ready", response.Status)
 	assert.True(t, response.Ready)
-	assert.Equal(t, 3, response.TSLCount)
-	assert.NotNil(t, response.TSLs, "TSLs field should be populated in verbose mode")
-	assert.Len(t, response.TSLs, 3, "Should include 3 registry infos in verbose mode")
+	assert.Equal(t, 3, response.RegistryCount)
+	assert.NotNil(t, response.Registries, "Registries field should be populated in verbose mode")
+	assert.Len(t, response.Registries, 3, "Should include 3 registry infos in verbose mode")
 }
 
 func TestReadyzEndpoint_NonVerbose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	now := time.Now()
-	ctx := createTestContext(3, now)
+	ctx := createTestContext(3, true)
 
 	r := gin.New()
 	RegisterHealthEndpoints(r, ctx)
@@ -355,7 +352,7 @@ func TestReadyzEndpoint_NonVerbose(t *testing.T) {
 
 	assert.Equal(t, "ready", response.Status)
 	assert.True(t, response.Ready)
-	assert.Nil(t, response.TSLs, "TSLs field should be nil/omitted in non-verbose mode")
+	assert.Nil(t, response.Registries, "Registries field should be nil/omitted in non-verbose mode")
 }
 
 func TestReadinessResponse_JSONFormat(t *testing.T) {
@@ -365,8 +362,8 @@ func TestReadinessResponse_JSONFormat(t *testing.T) {
 	response := ReadinessResponse{
 		Status:        "ready",
 		Timestamp:     ts,
-		TSLCount:      5,
-		LastProcessed: "2024-01-15T10:25:00Z",
+		RegistryCount: 5,
+		HealthyCount:  5,
 		Ready:         true,
 		Message:       "",
 	}
@@ -375,6 +372,7 @@ func TestReadinessResponse_JSONFormat(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, string(data), `"status":"ready"`)
-	assert.Contains(t, string(data), `"tsl_count":5`)
+	assert.Contains(t, string(data), `"registry_count":5`)
+	assert.Contains(t, string(data), `"healthy_count":5`)
 	assert.Contains(t, string(data), `"ready":true`)
 }
