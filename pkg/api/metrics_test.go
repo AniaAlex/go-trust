@@ -14,9 +14,9 @@ import (
 func TestNewMetrics(t *testing.T) {
 	m := NewMetrics()
 
-	assert.NotNil(t, m.PipelineExecutionDuration)
-	assert.NotNil(t, m.PipelineExecutionTotal)
-	assert.NotNil(t, m.PipelineExecutionErrors)
+	assert.NotNil(t, m.RefreshExecutionDuration)
+	assert.NotNil(t, m.RefreshExecutionTotal)
+	assert.NotNil(t, m.RefreshExecutionErrors)
 	assert.NotNil(t, m.TSLCount)
 	assert.NotNil(t, m.TSLProcessingDuration)
 	assert.NotNil(t, m.APIRequestsTotal)
@@ -104,24 +104,24 @@ func TestMetricsMiddleware_RecordsStatusCodes(t *testing.T) {
 	}
 }
 
-func TestRecordPipelineExecution(t *testing.T) {
+func TestRecordRefreshExecution(t *testing.T) {
 	m := NewMetrics()
 
 	// Test successful execution
-	m.RecordPipelineExecution(500*time.Millisecond, 5, nil)
+	m.RecordRefreshExecution(500*time.Millisecond, 5, nil)
 
 	// Test failed execution
-	m.RecordPipelineExecution(200*time.Millisecond, 0, assert.AnError)
+	m.RecordRefreshExecution(200*time.Millisecond, 0, assert.AnError)
 
 	// No panics = success
 }
 
-func TestRecordPipelineExecution_UpdatesTSLCount(t *testing.T) {
+func TestRecordRefreshExecution_UpdatesTSLCount(t *testing.T) {
 	m := NewMetrics()
 
-	m.RecordPipelineExecution(100*time.Millisecond, 10, nil)
-	m.RecordPipelineExecution(100*time.Millisecond, 15, nil)
-	m.RecordPipelineExecution(100*time.Millisecond, 5, nil)
+	m.RecordRefreshExecution(100*time.Millisecond, 10, nil)
+	m.RecordRefreshExecution(100*time.Millisecond, 15, nil)
+	m.RecordRefreshExecution(100*time.Millisecond, 5, nil)
 
 	// TSL count should be set to the last value (5)
 	// We can't easily verify the exact value without scraping metrics
@@ -190,7 +190,7 @@ func TestMetricsEndpoint_PrometheusFormat(t *testing.T) {
 	})
 
 	// Record some metrics
-	m.RecordPipelineExecution(500*time.Millisecond, 5, nil)
+	m.RecordRefreshExecution(500*time.Millisecond, 5, nil)
 	m.RecordTSLProcessing(100 * time.Millisecond)
 	m.RecordError("test_error", "test_operation")
 	m.RecordCertValidation(10*time.Millisecond, true)
@@ -211,7 +211,7 @@ func TestMetricsEndpoint_PrometheusFormat(t *testing.T) {
 	body := w.Body.String()
 
 	// Verify key metrics are present
-	assert.Contains(t, body, "go_trust_pipeline_execution_total")
+	assert.Contains(t, body, "go_trust_refresh_execution_total")
 	assert.Contains(t, body, "go_trust_tsl_count")
 	assert.Contains(t, body, "go_trust_api_requests_total")
 	assert.Contains(t, body, "go_trust_errors_total")
@@ -356,7 +356,7 @@ func TestRecordError_DifferentTypes(t *testing.T) {
 	// No panics = success
 }
 
-func TestPipelineMetrics_MultipleExecutions(t *testing.T) {
+func TestRefreshMetrics_MultipleExecutions(t *testing.T) {
 	m := NewMetrics()
 
 	executions := []struct {
@@ -371,7 +371,7 @@ func TestPipelineMetrics_MultipleExecutions(t *testing.T) {
 	}
 
 	for _, exec := range executions {
-		m.RecordPipelineExecution(exec.duration, exec.tslCount, exec.err)
+		m.RecordRefreshExecution(exec.duration, exec.tslCount, exec.err)
 	}
 
 	// All executions should be recorded without panic
@@ -396,12 +396,12 @@ func BenchmarkMetricsMiddleware(b *testing.B) {
 	}
 }
 
-func BenchmarkRecordPipelineExecution(b *testing.B) {
+func BenchmarkRecordRefreshExecution(b *testing.B) {
 	m := NewMetrics()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		m.RecordPipelineExecution(100*time.Millisecond, 5, nil)
+		m.RecordRefreshExecution(100*time.Millisecond, 5, nil)
 	}
 }
 

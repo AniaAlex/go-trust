@@ -14,11 +14,10 @@ import (
 )
 
 // Config represents the application configuration structure.
-// It includes settings for the server, logging, pipeline processing, and security.
+// It includes settings for the server, logging, registries, and security.
 type Config struct {
 	Server     ServerConfig     `yaml:"server"`
 	Logging    LoggingConfig    `yaml:"logging"`
-	Pipeline   PipelineConfig   `yaml:"pipeline"`
 	Security   SecurityConfig   `yaml:"security"`
 	Registries RegistriesConfig `yaml:"registries"`
 	Policies   PoliciesConfig   `yaml:"policies,omitempty"`
@@ -53,6 +52,12 @@ type ETSIRegistryConfig struct {
 	AllowNetworkAccess bool     `yaml:"allow_network_access"`
 	FetchTimeout       string   `yaml:"fetch_timeout"`
 	UserAgent          string   `yaml:"user_agent"`
+	// LOTLSignerBundle is the path to a PEM file containing trusted LOTL signer certificates.
+	// These certificates are used to validate signatures on the List of Trusted Lists (LOTL).
+	LOTLSignerBundle string `yaml:"lotl_signer_bundle,omitempty"`
+	// RequireSignature controls whether TSLs must have valid signatures.
+	// When true, LOTLSignerBundle must also be configured.
+	RequireSignature bool `yaml:"require_signature"`
 }
 
 // WhitelistRegistryConfig contains whitelist registry configuration.
@@ -245,14 +250,6 @@ type LoggingConfig struct {
 	Output string `yaml:"output"`
 }
 
-// PipelineConfig contains pipeline processing configuration settings.
-type PipelineConfig struct {
-	Timeout        time.Duration `yaml:"timeout"`
-	MaxRequestSize int64         `yaml:"max_request_size"`
-	MaxRedirects   int           `yaml:"max_redirects"`
-	AllowedHosts   []string      `yaml:"allowed_hosts"`
-}
-
 // SecurityConfig contains security-related configuration settings.
 type SecurityConfig struct {
 	RateLimitRPS   int      `yaml:"rate_limit_rps"`
@@ -277,12 +274,6 @@ func DefaultConfig() *Config {
 			Level:  "info",
 			Format: "text",
 			Output: "stdout",
-		},
-		Pipeline: PipelineConfig{
-			Timeout:        30 * time.Second,
-			MaxRequestSize: 10 * 1024 * 1024, // 10MB
-			MaxRedirects:   3,
-			AllowedHosts:   []string{},
 		},
 		Security: SecurityConfig{
 			RateLimitRPS:   100,
@@ -369,26 +360,6 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Logging.Output = v
 	}
 
-	// Pipeline configuration
-	if v := os.Getenv("GT_PIPELINE_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Pipeline.Timeout = d
-		}
-	}
-	if v := os.Getenv("GT_MAX_REQUEST_SIZE"); v != "" {
-		if size, err := strconv.ParseInt(v, 10, 64); err == nil {
-			cfg.Pipeline.MaxRequestSize = size
-		}
-	}
-	if v := os.Getenv("GT_MAX_REDIRECTS"); v != "" {
-		if redirects, err := strconv.Atoi(v); err == nil {
-			cfg.Pipeline.MaxRedirects = redirects
-		}
-	}
-	if v := os.Getenv("GT_ALLOWED_HOSTS"); v != "" {
-		cfg.Pipeline.AllowedHosts = strings.Split(v, ",")
-	}
-
 	// Security configuration
 	if v := os.Getenv("GT_RATE_LIMIT_RPS"); v != "" {
 		if rps, err := strconv.Atoi(v); err == nil {
@@ -442,20 +413,16 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid log format: %s", c.Logging.Format)
 	}
 
-	// Validate pipeline configuration
-	if c.Pipeline.Timeout <= 0 {
-		return fmt.Errorf("pipeline timeout must be positive")
-	}
-	if c.Pipeline.MaxRequestSize <= 0 {
-		return fmt.Errorf("max request size must be positive")
-	}
-	if c.Pipeline.MaxRedirects < 0 {
-		return fmt.Errorf("max redirects cannot be negative")
-	}
-
 	// Validate security configuration
 	if c.Security.RateLimitRPS <= 0 {
 		return fmt.Errorf("rate limit RPS must be positive")
+	}
+
+	// Validate ETSI registry configuration
+	if c.Registries.ETSI != nil && c.Registries.ETSI.Enabled {
+		if c.Registries.ETSI.RequireSignature && c.Registries.ETSI.LOTLSignerBundle == "" {
+			return fmt.Errorf("ETSI registry: lotl_signer_bundle is required when require_signature is true")
+		}
 	}
 
 	return nil

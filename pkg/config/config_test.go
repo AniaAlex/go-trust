@@ -32,17 +32,6 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("Default log output = %v, want %v", cfg.Logging.Output, "stdout")
 	}
 
-	// Test pipeline defaults
-	if cfg.Pipeline.Timeout != 30*time.Second {
-		t.Errorf("Default timeout = %v, want %v", cfg.Pipeline.Timeout, 30*time.Second)
-	}
-	if cfg.Pipeline.MaxRequestSize != 10*1024*1024 {
-		t.Errorf("Default max request size = %v, want %v", cfg.Pipeline.MaxRequestSize, 10*1024*1024)
-	}
-	if cfg.Pipeline.MaxRedirects != 3 {
-		t.Errorf("Default max redirects = %v, want %v", cfg.Pipeline.MaxRedirects, 3)
-	}
-
 	// Test security defaults
 	if cfg.Security.RateLimitRPS != 100 {
 		t.Errorf("Default rate limit = %v, want %v", cfg.Security.RateLimitRPS, 100)
@@ -67,14 +56,6 @@ logging:
   level: "debug"
   format: "json"
   output: "/var/log/go-trust.log"
-
-pipeline:
-  timeout: "60s"
-  max_request_size: 20971520
-  max_redirects: 5
-  allowed_hosts:
-    - "*.europa.eu"
-    - "*.example.com"
 
 security:
   rate_limit_rps: 200
@@ -113,20 +94,6 @@ security:
 	}
 	if cfg.Logging.Output != "/var/log/go-trust.log" {
 		t.Errorf("Log output = %v, want %v", cfg.Logging.Output, "/var/log/go-trust.log")
-	}
-
-	// Verify pipeline configuration
-	if cfg.Pipeline.Timeout != 60*time.Second {
-		t.Errorf("Timeout = %v, want %v", cfg.Pipeline.Timeout, 60*time.Second)
-	}
-	if cfg.Pipeline.MaxRequestSize != 20971520 {
-		t.Errorf("Max request size = %v, want %v", cfg.Pipeline.MaxRequestSize, 20971520)
-	}
-	if cfg.Pipeline.MaxRedirects != 5 {
-		t.Errorf("Max redirects = %v, want %v", cfg.Pipeline.MaxRedirects, 5)
-	}
-	if len(cfg.Pipeline.AllowedHosts) != 2 {
-		t.Errorf("Allowed hosts count = %v, want %v", len(cfg.Pipeline.AllowedHosts), 2)
 	}
 
 	// Verify security configuration
@@ -233,7 +200,6 @@ func TestValidateConfig(t *testing.T) {
 			config: &Config{
 				Server:   ServerConfig{Host: "127.0.0.1", Port: "", Frequency: 5 * time.Minute},
 				Logging:  LoggingConfig{Level: "info", Format: "text", Output: "stdout"},
-				Pipeline: PipelineConfig{Timeout: 30 * time.Second, MaxRequestSize: 1024, MaxRedirects: 3},
 				Security: SecurityConfig{RateLimitRPS: 100},
 			},
 			wantErr: true,
@@ -243,7 +209,6 @@ func TestValidateConfig(t *testing.T) {
 			config: &Config{
 				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: -1 * time.Minute},
 				Logging:  LoggingConfig{Level: "info", Format: "text", Output: "stdout"},
-				Pipeline: PipelineConfig{Timeout: 30 * time.Second, MaxRequestSize: 1024, MaxRedirects: 3},
 				Security: SecurityConfig{RateLimitRPS: 100},
 			},
 			wantErr: true,
@@ -253,7 +218,6 @@ func TestValidateConfig(t *testing.T) {
 			config: &Config{
 				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: 5 * time.Minute},
 				Logging:  LoggingConfig{Level: "invalid", Format: "text", Output: "stdout"},
-				Pipeline: PipelineConfig{Timeout: 30 * time.Second, MaxRequestSize: 1024, MaxRedirects: 3},
 				Security: SecurityConfig{RateLimitRPS: 100},
 			},
 			wantErr: true,
@@ -263,37 +227,6 @@ func TestValidateConfig(t *testing.T) {
 			config: &Config{
 				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: 5 * time.Minute},
 				Logging:  LoggingConfig{Level: "info", Format: "invalid", Output: "stdout"},
-				Pipeline: PipelineConfig{Timeout: 30 * time.Second, MaxRequestSize: 1024, MaxRedirects: 3},
-				Security: SecurityConfig{RateLimitRPS: 100},
-			},
-			wantErr: true,
-		},
-		{
-			name: "Negative timeout",
-			config: &Config{
-				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: 5 * time.Minute},
-				Logging:  LoggingConfig{Level: "info", Format: "text", Output: "stdout"},
-				Pipeline: PipelineConfig{Timeout: -1 * time.Second, MaxRequestSize: 1024, MaxRedirects: 3},
-				Security: SecurityConfig{RateLimitRPS: 100},
-			},
-			wantErr: true,
-		},
-		{
-			name: "Negative max request size",
-			config: &Config{
-				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: 5 * time.Minute},
-				Logging:  LoggingConfig{Level: "info", Format: "text", Output: "stdout"},
-				Pipeline: PipelineConfig{Timeout: 30 * time.Second, MaxRequestSize: -1, MaxRedirects: 3},
-				Security: SecurityConfig{RateLimitRPS: 100},
-			},
-			wantErr: true,
-		},
-		{
-			name: "Negative max redirects",
-			config: &Config{
-				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: 5 * time.Minute},
-				Logging:  LoggingConfig{Level: "info", Format: "text", Output: "stdout"},
-				Pipeline: PipelineConfig{Timeout: 30 * time.Second, MaxRequestSize: 1024, MaxRedirects: -1},
 				Security: SecurityConfig{RateLimitRPS: 100},
 			},
 			wantErr: true,
@@ -303,10 +236,41 @@ func TestValidateConfig(t *testing.T) {
 			config: &Config{
 				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: 5 * time.Minute},
 				Logging:  LoggingConfig{Level: "info", Format: "text", Output: "stdout"},
-				Pipeline: PipelineConfig{Timeout: 30 * time.Second, MaxRequestSize: 1024, MaxRedirects: 3},
 				Security: SecurityConfig{RateLimitRPS: 0},
 			},
 			wantErr: true,
+		},
+		{
+			name: "ETSI RequireSignature without LOTLSignerBundle",
+			config: &Config{
+				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: 5 * time.Minute},
+				Logging:  LoggingConfig{Level: "info", Format: "text", Output: "stdout"},
+				Security: SecurityConfig{RateLimitRPS: 100},
+				Registries: RegistriesConfig{
+					ETSI: &ETSIRegistryConfig{
+						Enabled:          true,
+						RequireSignature: true,
+						LOTLSignerBundle: "",
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "ETSI RequireSignature with LOTLSignerBundle",
+			config: &Config{
+				Server:   ServerConfig{Host: "127.0.0.1", Port: "6001", Frequency: 5 * time.Minute},
+				Logging:  LoggingConfig{Level: "info", Format: "text", Output: "stdout"},
+				Security: SecurityConfig{RateLimitRPS: 100},
+				Registries: RegistriesConfig{
+					ETSI: &ETSIRegistryConfig{
+						Enabled:          true,
+						RequireSignature: true,
+						LOTLSignerBundle: "/path/to/signers.pem",
+					},
+				},
+			},
+			wantErr: false,
 		},
 	}
 
@@ -320,39 +284,17 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
-func TestEnvOverridesWithPipelineAndSecurityConfig(t *testing.T) {
-	// Set additional environment variables
-	os.Setenv("GT_PIPELINE_TIMEOUT", "120s")
-	os.Setenv("GT_MAX_REQUEST_SIZE", "52428800")
-	os.Setenv("GT_MAX_REDIRECTS", "10")
-	os.Setenv("GT_ALLOWED_HOSTS", "*.example.com,*.test.org")
+func TestEnvOverridesWithSecurityConfig(t *testing.T) {
+	// Set security environment variables
 	os.Setenv("GT_ALLOWED_ORIGINS", "https://app1.com,https://app2.com")
 
 	defer func() {
-		os.Unsetenv("GT_PIPELINE_TIMEOUT")
-		os.Unsetenv("GT_MAX_REQUEST_SIZE")
-		os.Unsetenv("GT_MAX_REDIRECTS")
-		os.Unsetenv("GT_ALLOWED_HOSTS")
 		os.Unsetenv("GT_ALLOWED_ORIGINS")
 	}()
 
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
-	}
-
-	// Verify pipeline environment variables
-	if cfg.Pipeline.Timeout != 120*time.Second {
-		t.Errorf("Timeout = %v, want %v", cfg.Pipeline.Timeout, 120*time.Second)
-	}
-	if cfg.Pipeline.MaxRequestSize != 52428800 {
-		t.Errorf("Max request size = %v, want %v", cfg.Pipeline.MaxRequestSize, 52428800)
-	}
-	if cfg.Pipeline.MaxRedirects != 10 {
-		t.Errorf("Max redirects = %v, want %v", cfg.Pipeline.MaxRedirects, 10)
-	}
-	if len(cfg.Pipeline.AllowedHosts) != 2 {
-		t.Errorf("Allowed hosts count = %v, want %v", len(cfg.Pipeline.AllowedHosts), 2)
 	}
 
 	// Verify security environment variables
