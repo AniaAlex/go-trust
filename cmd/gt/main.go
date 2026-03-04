@@ -307,10 +307,12 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 		etsiCfg := cfg.Registries.ETSI
 
 		tslConfig := etsi.TSLConfig{
-			Name:        etsiCfg.Name,
-			Description: etsiCfg.Description,
-			CertBundle:  etsiCfg.CertBundle,
-			TSLFiles:    etsiCfg.TSLFiles,
+			Name:             etsiCfg.Name,
+			Description:      etsiCfg.Description,
+			CertBundle:       etsiCfg.CertBundle,
+			TSLFiles:         etsiCfg.TSLFiles,
+			LOTLSignerBundle: etsiCfg.LOTLSignerBundle,
+			RequireSignature: etsiCfg.RequireSignature,
 		}
 
 		if tslConfig.Name == "" {
