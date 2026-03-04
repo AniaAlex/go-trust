@@ -201,7 +201,11 @@ Evaluates X.509 certificates against ETSI TS 119 612 Trust Status Lists.
 - `--etsi-cert-bundle`: PEM file with trusted CA certificates (processed by tsl-tool)
 - `--etsi-tsl-files`: Raw TSL XML files
 
-**Supported resource types:** `x509_certificate`, `x5c`
+**Supported resource types:** `x509_certificate`, `x509_san_dns`, `x5c`
+
+**Configuration options (in YAML config file):**
+- `lotl_signer_bundle`: PEM file containing trusted LOTL signer certificates for signature validation
+- `require_signature`: When true, TSLs must have valid signatures (requires `lotl_signer_bundle`)
 
 #### OpenID Federation Registry
 

@@ -385,7 +385,7 @@ Press `Ctrl+Shift+B` (or `Cmd+Shift+B` on Mac) to see available tasks:
 
 Multiple debug configurations are available in `.vscode/launch.json`:
 
-1. **Launch go-trust server** - Run server with example pipeline
+1. **Launch go-trust server** - Run server with example configuration
 2. **Launch go-trust (custom args)** - Run with custom arguments
 3. **Test Current File** - Debug tests in current file
 4. **Test Current Package** - Debug all tests in package

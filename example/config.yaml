@@ -73,7 +73,7 @@ registries:
   # Validates X.509 certificates against ETSI TS 119612 Trust Status Lists.
   # Best for: EU eIDAS trust services, qualified certificates
   #
-  # Supported resource types: x5c
+  # Supported resource types: x509_certificate, x509_san_dns, x5c
   # Resolution-only: No (requires certificate to evaluate)
 
   etsi:
@@ -102,6 +102,15 @@ registries:
     allow_network_access: false  # Disable for production security
     fetch_timeout: "30s"
     user_agent: "Go-Trust/2.0 TSL Registry"
+
+    # LOTL signature validation (optional)
+    # Path to PEM file containing trusted LOTL signer certificates.
+    # These certificates are used to validate signatures on the List of Trusted Lists.
+    # lotl_signer_bundle: "/etc/go-trust/lotl-signers.pem"
+
+    # When true, TSLs must have valid signatures.
+    # Requires lotl_signer_bundle to be configured.
+    require_signature: false
 
   # ---------------------------------------------------------------------------
   # OpenID Federation Registry (entity trust chains)
