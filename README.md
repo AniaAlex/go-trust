@@ -118,18 +118,16 @@ Environment variable: `GO_TRUST_EXTERNAL_URL` for external URL.
 ```json
 {
   "subject": {
-    "type": "x509_certificate",
-    "id": "subject-123",
-    "properties": {
-      "x5c": ["MIIDQjCCAiqgAwIBAgIUJlq+zz4..."]
-    }
+    "type": "key",
+    "id": "https://issuer.example.com"
   },
   "resource": {
-    "type": "service",
-    "id": "resource-123"
+    "type": "x5c",
+    "id": "https://issuer.example.com",
+    "key": ["MIIDQjCCAiqgAwIBAgIUJlq+zz4..."]
   },
   "action": {
-    "name": "trust"
+    "name": "credential-issuer"
   }
 }
 ```
@@ -201,7 +199,7 @@ Evaluates X.509 certificates against ETSI TS 119 612 Trust Status Lists.
 - `--etsi-cert-bundle`: PEM file with trusted CA certificates (processed by tsl-tool)
 - `--etsi-tsl-files`: Raw TSL XML files
 
-**Supported resource types:** `x509_certificate`, `x509_san_dns`, `x5c`
+**Supported resource types:** `x5c`, `jwk`, `x509_san_dns`
 
 **Configuration options (in YAML config file):**
 - `lotl_signer_bundle`: PEM file containing trusted LOTL signer certificates for signature validation

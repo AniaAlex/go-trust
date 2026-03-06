@@ -1,8 +1,15 @@
 # API Design with AuthZEN and Gin Framework
 
-- Status: Accepted
+- Status: Accepted (Amended)
 - Deciders: Development Team
 - Date: 2025-10-17
+- Amended: 2026-03-06
+
+> **Note:** The request format documented below shows the initial design. The actual
+> implementation follows the [AuthZEN Trust Registry Profile](https://leifj.github.io/draft-johansson-authzen-trust/)
+> which uses `subject.type="key"`, `resource.type="jwk"|"x5c"`, and `resource.key` for key data.
+> The actual endpoint is `POST /evaluation` (not `/authzen/decision`).
+> Health endpoints are `/healthz` and `/readyz` only.
 
 ## Context and Problem Statement
 

@@ -1,8 +1,12 @@
 # Observability with Prometheus and Health Checks
 
-- Status: Accepted
+- Status: Accepted (Amended)
 - Deciders: Development Team
 - Date: 2025-10-17
+- Amended: 2026-03-06
+
+> **Note:** The implementation uses only `/healthz` and `/readyz` for health endpoints.
+> The aliases `/health`, `/ready`, and `/readiness` mentioned below are NOT registered.
 
 ## Context and Problem Statement
 
