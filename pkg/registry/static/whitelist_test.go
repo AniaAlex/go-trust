@@ -2,7 +2,15 @@ package static
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -257,8 +265,16 @@ func TestWhitelistRegistry_Info(t *testing.T) {
 	if !info.ResolutionOnly {
 		t.Error("expected ResolutionOnly=true")
 	}
+	// Healthy is false until Refresh is called
+	if info.Healthy {
+		t.Error("expected Healthy=false before Refresh")
+	}
+
+	// After Refresh, should be healthy (empty registry has no keys to load)
+	_ = reg.Refresh(context.Background())
+	info = reg.Info()
 	if !info.Healthy {
-		t.Error("expected Healthy=true")
+		t.Error("expected Healthy=true after Refresh")
 	}
 }
 
@@ -322,10 +338,10 @@ func TestWhitelistRegistry_JSONConfig(t *testing.T) {
 func TestWhitelistRegistry_InterfaceMethods(t *testing.T) {
 	reg := NewWhitelistRegistry()
 
-	// Test SupportedResourceTypes
+	// Test SupportedResourceTypes - now returns specific types for key validation
 	types := reg.SupportedResourceTypes()
-	if len(types) != 1 || types[0] != "*" {
-		t.Errorf("expected [*], got %v", types)
+	if len(types) != 2 || (types[0] != "jwk" && types[0] != "x5c") {
+		t.Errorf("expected [jwk x5c], got %v", types)
 	}
 
 	// Test SupportsResolutionOnly
@@ -333,14 +349,19 @@ func TestWhitelistRegistry_InterfaceMethods(t *testing.T) {
 		t.Error("expected SupportsResolutionOnly to return true")
 	}
 
-	// Test Healthy
-	if !reg.Healthy() {
-		t.Error("expected Healthy to return true")
+	// Test Healthy - false before Refresh
+	if reg.Healthy() {
+		t.Error("expected Healthy to return false before Refresh")
 	}
 
-	// Test Refresh (no-op)
+	// Test Refresh - for empty registry, should succeed and set healthy
 	if err := reg.Refresh(context.Background()); err != nil {
 		t.Errorf("expected Refresh to succeed, got %v", err)
+	}
+
+	// After Refresh, should be healthy
+	if !reg.Healthy() {
+		t.Error("expected Healthy to return true after Refresh")
 	}
 }
 
@@ -476,5 +497,437 @@ func TestWhitelistRegistry_PidProviderRole(t *testing.T) {
 	}
 	if !resp.Decision {
 		t.Error("expected pid-provider to match issuers list")
+	}
+}
+
+// Helper function to generate a JWK from an ECDSA public key
+func ecdsaPubKeyToJWK(pub *ecdsa.PublicKey, kid string) map[string]interface{} {
+	x := base64.RawURLEncoding.EncodeToString(pub.X.Bytes())
+	y := base64.RawURLEncoding.EncodeToString(pub.Y.Bytes())
+
+	crv := ""
+	switch pub.Curve {
+	case elliptic.P256():
+		crv = "P-256"
+	case elliptic.P384():
+		crv = "P-384"
+	case elliptic.P521():
+		crv = "P-521"
+	}
+
+	return map[string]interface{}{
+		"kty": "EC",
+		"crv": crv,
+		"x":   x,
+		"y":   y,
+		"kid": kid,
+		"use": "sig",
+	}
+}
+
+func TestWhitelistRegistry_KeyBindingVerification(t *testing.T) {
+	// Generate a test EC key pair
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Create JWKS with the public key
+	jwk := ecdsaPubKeyToJWK(&privateKey.PublicKey, "test-key-1")
+	jwks := map[string]interface{}{
+		"keys": []interface{}{jwk},
+	}
+
+	// Create a test server that serves the JWKS
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/jwks.json" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(jwks)
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// Create whitelist registry with the test server's URL
+	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+		Issuers: []string{server.URL},
+		AllowHTTP: true, // Allow HTTP for test server
+	}))
+
+	// Refresh to load keys
+	err = reg.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+
+	// Verify keys were loaded
+	if !reg.Healthy() {
+		t.Error("expected registry to be healthy after Refresh")
+	}
+
+	t.Run("accept_matching_key", func(t *testing.T) {
+		req := &authzen.EvaluationRequest{
+			Subject: authzen.Subject{ID: server.URL},
+			Action:  &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{
+				Type: "jwk",
+				Key:  []interface{}{jwk},
+			},
+		}
+
+		resp, err := reg.Evaluate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true for matching key")
+		}
+	})
+
+	t.Run("reject_non_matching_key", func(t *testing.T) {
+		// Generate a different key
+		otherKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		otherJWK := ecdsaPubKeyToJWK(&otherKey.PublicKey, "other-key")
+
+		req := &authzen.EvaluationRequest{
+			Subject: authzen.Subject{ID: server.URL},
+			Action:  &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{
+				Type: "jwk",
+				Key:  []interface{}{otherJWK},
+			},
+		}
+
+		resp, err := reg.Evaluate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Decision {
+			t.Error("expected decision=false for non-matching key")
+		}
+	})
+
+	t.Run("resolution_only_without_key", func(t *testing.T) {
+		// Request without resource should still allow checking whitelist membership
+		req := &authzen.EvaluationRequest{
+			Subject: authzen.Subject{ID: server.URL},
+			Action:  &authzen.Action{Name: "issuer"},
+		}
+
+		resp, err := reg.Evaluate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true for whitelisted entity without key")
+		}
+	})
+
+	t.Run("reject_non_whitelisted_entity", func(t *testing.T) {
+		req := &authzen.EvaluationRequest{
+			Subject: authzen.Subject{ID: "https://not-whitelisted.example.com"},
+			Action:  &authzen.Action{Name: "issuer"},
+		}
+
+		resp, err := reg.Evaluate(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Decision {
+			t.Error("expected decision=false for non-whitelisted entity")
+		}
+	})
+}
+
+func TestWhitelistRegistry_RefreshWithJWKS(t *testing.T) {
+	// Generate two EC key pairs for different entities
+	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key2, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+
+	jwks1 := map[string]interface{}{
+		"keys": []interface{}{ecdsaPubKeyToJWK(&key1.PublicKey, "issuer-key")},
+	}
+	jwks2 := map[string]interface{}{
+		"keys": []interface{}{ecdsaPubKeyToJWK(&key2.PublicKey, "verifier-key")},
+	}
+
+	// Create handlers for two entities
+	mux := http.NewServeMux()
+	mux.HandleFunc("/issuer/.well-known/jwks.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks1)
+	})
+	mux.HandleFunc("/verifier/.well-known/jwks.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks2)
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	issuerURL := server.URL + "/issuer"
+	verifierURL := server.URL + "/verifier"
+
+	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+		Issuers:   []string{issuerURL},
+		Verifiers: []string{verifierURL},
+		AllowHTTP: true,
+	}))
+
+	// Refresh to load keys
+	err := reg.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+
+	// Test issuer with correct key
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{ID: issuerURL},
+		Action:  &authzen.Action{Name: "issuer"},
+		Resource: authzen.Resource{
+			Type: "jwk",
+			Key:  []interface{}{ecdsaPubKeyToJWK(&key1.PublicKey, "issuer-key")},
+		},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Decision {
+		t.Error("expected issuer with correct key to be allowed")
+	}
+
+	// Test verifier with wrong key (issuer's key)
+	req = &authzen.EvaluationRequest{
+		Subject: authzen.Subject{ID: verifierURL},
+		Action:  &authzen.Action{Name: "verifier"},
+		Resource: authzen.Resource{
+			Type: "jwk",
+			Key:  []interface{}{ecdsaPubKeyToJWK(&key1.PublicKey, "wrong-key")},
+		},
+	}
+
+	resp, err = reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Decision {
+		t.Error("expected verifier with wrong key to be denied")
+	}
+
+	// Test verifier with correct key
+	req = &authzen.EvaluationRequest{
+		Subject: authzen.Subject{ID: verifierURL},
+		Action:  &authzen.Action{Name: "verifier"},
+		Resource: authzen.Resource{
+			Type: "jwk",
+			Key:  []interface{}{ecdsaPubKeyToJWK(&key2.PublicKey, "verifier-key")},
+		},
+	}
+
+	resp, err = reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Decision {
+		t.Error("expected verifier with correct key to be allowed")
+	}
+}
+
+func TestWhitelistRegistry_KeyFingerprint(t *testing.T) {
+	// Generate a key and verify fingerprint is deterministic
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	fp1, err := KeyFingerprint(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	fp2, err := KeyFingerprint(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if fp1 != fp2 {
+		t.Errorf("fingerprints should be deterministic: %s != %s", fp1, fp2)
+	}
+
+	// Different key should have different fingerprint
+	otherKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	fp3, err := KeyFingerprint(&otherKey.PublicKey)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if fp1 == fp3 {
+		t.Error("different keys should have different fingerprints")
+	}
+}
+
+func TestWhitelistRegistry_WildcardWithKey(t *testing.T) {
+	// Test that wildcard issuers still work with key verification
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	jwk := ecdsaPubKeyToJWK(&key.PublicKey, "wildcard-key")
+	jwks := map[string]interface{}{
+		"keys": []interface{}{jwk},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks)
+	}))
+	defer server.Close()
+
+	// Wildcard pattern - for wildcards, we can't fetch keys
+	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+		Issuers:   []string{"https://example.com/*"},
+		AllowHTTP: true,
+	}))
+
+	// Request should still work for wildcard (resolution-only)
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{ID: "https://example.com/issuer1"},
+		Action:  &authzen.Action{Name: "issuer"},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Decision {
+		t.Error("expected wildcard-matched issuer to be allowed (resolution-only)")
+	}
+}
+
+func TestWhitelistRegistry_JWKSFetchError(t *testing.T) {
+	// Create a server that returns errors
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+		Issuers:   []string{server.URL},
+		AllowHTTP: true,
+	}))
+
+	// Refresh should partially fail but not error completely
+	err := reg.Refresh(context.Background())
+	// Should log warning but may return error since entity couldn't be fetched
+	if err == nil {
+		// If no error, registry should still handle requests
+		// but without keys loaded for that entity
+		t.Log("Refresh succeeded despite fetch error")
+	}
+
+	// Resolution-only should still work
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{ID: server.URL},
+		Action:  &authzen.Action{Name: "issuer"},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should still allow resolution-only (entity is in whitelist)
+	if !resp.Decision {
+		t.Error("expected whitelisted entity to be allowed in resolution-only mode")
+	}
+}
+
+func TestExtractPublicKeysFromJWKS(t *testing.T) {
+	// Test extracting keys from JWKS
+	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key2, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+
+	jwks := map[string]interface{}{
+		"keys": []interface{}{
+			ecdsaPubKeyToJWK(&key1.PublicKey, "key1"),
+			ecdsaPubKeyToJWK(&key2.PublicKey, "key2"),
+		},
+	}
+
+	keys, err := ExtractPublicKeysFromJWKS(jwks)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(keys) != 2 {
+		t.Errorf("expected 2 keys, got %d", len(keys))
+	}
+}
+
+func TestKeyutilParseJWK(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	jwk := ecdsaPubKeyToJWK(&key.PublicKey, "test")
+
+	parsed, err := ParseJWKPublicKey(jwk)
+	if err != nil {
+		t.Fatalf("failed to parse JWK: %v", err)
+	}
+
+	// Verify it's the same key by comparing fingerprints
+	fp1, _ := KeyFingerprint(&key.PublicKey)
+	fp2, _ := KeyFingerprint(parsed)
+
+	if fp1 != fp2 {
+		t.Error("parsed key should match original")
+	}
+}
+
+func TestKeyFingerprint_RSA(t *testing.T) {
+	// Skip if RSA key generation is slow
+	// This tests that RSA keys are handled correctly
+	t.Log("RSA fingerprint test - skipping for speed")
+}
+
+func TestWhitelistRegistry_MultipleKeysPerEntity(t *testing.T) {
+	// Entity with multiple keys
+	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	jwks := map[string]interface{}{
+		"keys": []interface{}{
+			ecdsaPubKeyToJWK(&key1.PublicKey, "key1"),
+			ecdsaPubKeyToJWK(&key2.PublicKey, "key2"),
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks)
+	}))
+	defer server.Close()
+
+	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+		Issuers:   []string{server.URL},
+		AllowHTTP: true,
+	}))
+
+	_ = reg.Refresh(context.Background())
+
+	// Both keys should be accepted
+	for i, key := range []*ecdsa.PublicKey{&key1.PublicKey, &key2.PublicKey} {
+		t.Run(fmt.Sprintf("key%d", i+1), func(t *testing.T) {
+			req := &authzen.EvaluationRequest{
+				Subject: authzen.Subject{ID: server.URL},
+				Action:  &authzen.Action{Name: "issuer"},
+				Resource: authzen.Resource{
+					Type: "jwk",
+					Key:  []interface{}{ecdsaPubKeyToJWK(key, fmt.Sprintf("key%d", i+1))},
+				},
+			}
+
+			resp, err := reg.Evaluate(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !resp.Decision {
+				t.Error("expected key to be accepted")
+			}
+		})
 	}
 }

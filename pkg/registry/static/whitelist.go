@@ -3,13 +3,17 @@ package static
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
@@ -18,11 +22,14 @@ import (
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
-// WhitelistRegistry is a TrustRegistry that maintains a whitelist of trusted subjects.
+// WhitelistRegistry is a TrustRegistry that maintains a whitelist of trusted subjects
+// and validates name-to-key bindings by fetching and caching entity JWKS.
 //
-// This is the simplest trust model: if a subject URL is in the whitelist, it's trusted.
-// For more sophisticated trust evaluation (certificate validation, key binding, etc.),
-// use ETSI, OpenID Federation, or other registries.
+// Unlike simple URL-based whitelisting, this registry:
+// 1. Resolves each whitelisted entity's JWKS endpoint
+// 2. Extracts and normalizes public keys
+// 3. Computes SHA-256 fingerprints for each key
+// 4. Validates that incoming request keys match a whitelisted entity's keys
 type WhitelistRegistry struct {
 	name        string
 	description string
@@ -30,24 +37,48 @@ type WhitelistRegistry struct {
 	mu     sync.RWMutex
 	config WhitelistConfig
 
+	// keyHashes maps entity ID to a set of allowed key fingerprints.
+	// Each entity can have multiple keys (key rotation, different purposes).
+	keyHashes map[string]map[string]bool
+
+	// HTTP client for fetching JWKS
+	httpClient *http.Client
+
 	// File watching
 	configPath string
 	watcher    *fsnotify.Watcher
 	stopCh     chan struct{}
 	logger     *slog.Logger
+
+	// Track if keys have been loaded
+	keysLoaded  bool
+	lastRefresh time.Time
 }
 
 // WhitelistConfig holds the whitelist configuration.
 type WhitelistConfig struct {
 	// Issuers is a list of trusted credential issuer URLs/identifiers.
+	// The registry will fetch JWKS from each issuer's well-known endpoint.
 	Issuers []string `json:"issuers" yaml:"issuers"`
 
 	// Verifiers is a list of trusted verifier URLs/identifiers.
+	// The registry will fetch JWKS from each verifier's well-known endpoint.
 	Verifiers []string `json:"verifiers" yaml:"verifiers"`
 
 	// TrustedSubjects is a catch-all for subjects that should be trusted
 	// regardless of role. This is checked if role-specific lists don't match.
 	TrustedSubjects []string `json:"trusted_subjects" yaml:"trusted_subjects"`
+
+	// JWKSEndpointPattern specifies the URL pattern for fetching JWKS.
+	// Default: "{entity}/.well-known/jwks.json"
+	// Use {entity} as placeholder for the entity URL.
+	JWKSEndpointPattern string `json:"jwks_endpoint_pattern,omitempty" yaml:"jwks_endpoint_pattern,omitempty"`
+
+	// FetchTimeout is the timeout for fetching JWKS (default: 30s).
+	FetchTimeout string `json:"fetch_timeout,omitempty" yaml:"fetch_timeout,omitempty"`
+
+	// AllowHTTP allows fetching JWKS over HTTP (default: false, requires HTTPS).
+	AllowHTTP bool `json:"allow_http,omitempty" yaml:"allow_http,omitempty"`
 }
 
 // WhitelistOption is a functional option for configuring WhitelistRegistry.
@@ -81,13 +112,24 @@ func WithWhitelistLogger(logger *slog.Logger) WhitelistOption {
 	}
 }
 
+// WithHTTPClient sets a custom HTTP client for JWKS fetching.
+func WithHTTPClient(client *http.Client) WhitelistOption {
+	return func(r *WhitelistRegistry) {
+		r.httpClient = client
+	}
+}
+
 // NewWhitelistRegistry creates a new whitelist registry.
 func NewWhitelistRegistry(opts ...WhitelistOption) *WhitelistRegistry {
 	r := &WhitelistRegistry{
 		name:        "whitelist",
-		description: "Simple URL whitelist for trusted issuers and verifiers",
+		description: "Key-binding whitelist for trusted issuers and verifiers",
 		config:      WhitelistConfig{},
 		logger:      slog.Default(),
+		keyHashes:   make(map[string]map[string]bool),
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 
 	for _, opt := range opts {
@@ -227,34 +269,81 @@ func (r *WhitelistRegistry) Close() error {
 	return nil
 }
 
-// Evaluate checks if the subject is in the whitelist.
+// Evaluate checks if the name-to-key binding is trusted.
+// The subject ID must be in the whitelist AND the provided key must match
+// one of the entity's registered keys (fetched from their JWKS endpoint).
 func (r *WhitelistRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	subjectID := req.Subject.ID
-
-	// Determine role from action
 	role := r.extractRole(req)
 
-	// Check role-specific lists first
+	// First check if subject is in whitelist
+	var matchedList string
+	var inWhitelist bool
+
 	switch role {
 	case "issuer", "credential-issuer", "pid-provider":
 		if r.matchesList(subjectID, r.config.Issuers) {
-			return r.allow(subjectID, role, "issuers")
+			inWhitelist = true
+			matchedList = "issuers"
 		}
 	case "verifier", "credential-verifier":
 		if r.matchesList(subjectID, r.config.Verifiers) {
-			return r.allow(subjectID, role, "verifiers")
+			inWhitelist = true
+			matchedList = "verifiers"
 		}
 	}
 
 	// Check catch-all trusted subjects
-	if r.matchesList(subjectID, r.config.TrustedSubjects) {
-		return r.allow(subjectID, role, "trusted_subjects")
+	if !inWhitelist && r.matchesList(subjectID, r.config.TrustedSubjects) {
+		inWhitelist = true
+		matchedList = "trusted_subjects"
 	}
 
-	return r.deny(subjectID, fmt.Sprintf("subject not in whitelist for role '%s'", role))
+	if !inWhitelist {
+		return r.deny(subjectID, fmt.Sprintf("subject not in whitelist for role '%s'", role))
+	}
+
+	// If this is a resolution-only request (no key provided), allow based on whitelist membership
+	if req.IsResolutionOnlyRequest() {
+		return r.allowResolutionOnly(subjectID, role, matchedList)
+	}
+
+	// Verify key binding: extract the key from the request and check against cached hashes
+	keyFingerprint, err := r.extractKeyFingerprint(req)
+	if err != nil {
+		return r.deny(subjectID, fmt.Sprintf("failed to extract key: %s", err))
+	}
+
+	// Check if the key fingerprint matches any of the entity's registered keys
+	allowedKeys, hasKeys := r.keyHashes[subjectID]
+	if !hasKeys || len(allowedKeys) == 0 {
+		// No keys cached for this entity - need to refresh
+		return r.deny(subjectID, "no keys cached for entity; call Refresh() to load keys")
+	}
+
+	if allowedKeys[keyFingerprint] {
+		return r.allowWithKey(subjectID, role, matchedList, keyFingerprint)
+	}
+
+	return r.deny(subjectID, "key fingerprint does not match any registered keys for this entity")
+}
+
+// extractKeyFingerprint extracts and computes fingerprint of the key from the request.
+func (r *WhitelistRegistry) extractKeyFingerprint(req *authzen.EvaluationRequest) (string, error) {
+	pubKey, err := ExtractPublicKeyFromRequest(req.Resource.Type, req.Resource.Key)
+	if err != nil {
+		return "", fmt.Errorf("extracting public key: %w", err)
+	}
+
+	fingerprint, err := KeyFingerprint(pubKey)
+	if err != nil {
+		return "", fmt.Errorf("computing fingerprint: %w", err)
+	}
+
+	return fingerprint, nil
 }
 
 // extractRole extracts the role from the request action.
@@ -284,15 +373,31 @@ func (r *WhitelistRegistry) matchesList(subject string, list []string) bool {
 	return false
 }
 
-func (r *WhitelistRegistry) allow(subject, role, matchedList string) (*authzen.EvaluationResponse, error) {
+func (r *WhitelistRegistry) allowWithKey(subject, role, matchedList, keyFingerprint string) (*authzen.EvaluationResponse, error) {
 	return &authzen.EvaluationResponse{
 		Decision: true,
 		Context: &authzen.EvaluationResponseContext{
 			Reason: map[string]interface{}{
-				"registry":     r.name,
-				"type":         "whitelist",
-				"role":         role,
-				"matched_list": matchedList,
+				"registry":        r.name,
+				"type":            "whitelist",
+				"role":            role,
+				"matched_list":    matchedList,
+				"key_fingerprint": keyFingerprint,
+			},
+		},
+	}, nil
+}
+
+func (r *WhitelistRegistry) allowResolutionOnly(subject, role, matchedList string) (*authzen.EvaluationResponse, error) {
+	return &authzen.EvaluationResponse{
+		Decision: true,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: map[string]interface{}{
+				"registry":        r.name,
+				"type":            "whitelist",
+				"role":            role,
+				"matched_list":    matchedList,
+				"resolution_only": true,
 			},
 		},
 	}, nil
@@ -311,37 +416,174 @@ func (r *WhitelistRegistry) deny(subject, reason string) (*authzen.EvaluationRes
 	}, nil
 }
 
-// SupportedResourceTypes returns all types since whitelist doesn't validate keys.
+// SupportedResourceTypes returns the resource types this registry can validate.
 func (r *WhitelistRegistry) SupportedResourceTypes() []string {
-	return []string{"*"}
+	return []string{"jwk", "x5c"}
 }
 
-// SupportsResolutionOnly returns true since whitelist doesn't require key material.
+// SupportsResolutionOnly returns true since whitelist supports resolution-only requests
+// (checking if entity is whitelisted without validating a specific key).
 func (r *WhitelistRegistry) SupportsResolutionOnly() bool {
 	return true
 }
 
 // Info returns metadata about this registry.
 func (r *WhitelistRegistry) Info() registry.RegistryInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	return registry.RegistryInfo{
 		Name:           r.name,
 		Type:           "static_whitelist",
 		Description:    r.description,
-		Version:        "1.0.0",
-		ResourceTypes:  []string{"*"},
+		Version:        "2.0.0",
+		ResourceTypes:  []string{"jwk", "x5c"},
 		ResolutionOnly: true,
-		Healthy:        true,
+		Healthy:        r.keysLoaded,
 	}
 }
 
-// Healthy always returns true.
+// Healthy returns true if keys have been loaded for whitelisted entities.
 func (r *WhitelistRegistry) Healthy() bool {
-	return true
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.keysLoaded
 }
 
-// Refresh reloads the configuration (no-op for in-memory config).
+// Refresh fetches JWKS for all whitelisted entities and caches their key fingerprints.
 func (r *WhitelistRegistry) Refresh(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Collect all unique entities
+	entities := make(map[string]bool)
+	for _, issuer := range r.config.Issuers {
+		if issuer != "*" && !strings.HasSuffix(issuer, "*") {
+			entities[issuer] = true
+		}
+	}
+	for _, verifier := range r.config.Verifiers {
+		if verifier != "*" && !strings.HasSuffix(verifier, "*") {
+			entities[verifier] = true
+		}
+	}
+	for _, subject := range r.config.TrustedSubjects {
+		if subject != "*" && !strings.HasSuffix(subject, "*") {
+			entities[subject] = true
+		}
+	}
+
+	// Clear existing key hashes
+	r.keyHashes = make(map[string]map[string]bool)
+
+	// Fetch JWKS for each entity
+	var errors []string
+	for entity := range entities {
+		keys, err := r.fetchEntityKeys(ctx, entity)
+		if err != nil {
+			r.logger.Warn("failed to fetch keys for entity",
+				"entity", entity,
+				"error", err)
+			errors = append(errors, fmt.Sprintf("%s: %s", entity, err))
+			continue
+		}
+
+		keySet := make(map[string]bool)
+		for _, key := range keys {
+			fingerprint, err := KeyFingerprint(key)
+			if err != nil {
+				r.logger.Warn("failed to compute key fingerprint",
+					"entity", entity,
+					"error", err)
+				continue
+			}
+			keySet[fingerprint] = true
+		}
+
+		if len(keySet) > 0 {
+			r.keyHashes[entity] = keySet
+			r.logger.Info("loaded keys for entity",
+				"entity", entity,
+				"key_count", len(keySet))
+		}
+	}
+
+	r.keysLoaded = len(r.keyHashes) > 0 || len(entities) == 0
+	r.lastRefresh = time.Now()
+
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to fetch keys for %d entities", len(errors))
+	}
+
+	r.logger.Info("whitelist keys refreshed",
+		"entities", len(r.keyHashes),
+		"total_keys", r.countTotalKeys())
 	return nil
+}
+
+// countTotalKeys returns the total number of cached key fingerprints.
+func (r *WhitelistRegistry) countTotalKeys() int {
+	count := 0
+	for _, keys := range r.keyHashes {
+		count += len(keys)
+	}
+	return count
+}
+
+// fetchEntityKeys fetches JWKS from an entity's well-known endpoint.
+func (r *WhitelistRegistry) fetchEntityKeys(ctx context.Context, entity string) ([]crypto.PublicKey, error) {
+	// Determine JWKS URL
+	jwksURL := r.buildJWKSURL(entity)
+
+	// Validate URL scheme
+	if !r.config.AllowHTTP && !strings.HasPrefix(jwksURL, "https://") {
+		return nil, fmt.Errorf("HTTPS required for JWKS fetch (got %s)", jwksURL)
+	}
+
+	// Create request
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	// Fetch JWKS
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching JWKS: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("JWKS fetch returned status %d", resp.StatusCode)
+	}
+
+	// Parse response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	var jwks map[string]interface{}
+	if err := json.Unmarshal(body, &jwks); err != nil {
+		return nil, fmt.Errorf("parsing JWKS: %w", err)
+	}
+
+	return ExtractPublicKeysFromJWKS(jwks)
+}
+
+// buildJWKSURL constructs the JWKS URL for an entity.
+func (r *WhitelistRegistry) buildJWKSURL(entity string) string {
+	pattern := r.config.JWKSEndpointPattern
+	if pattern == "" {
+		pattern = "{entity}/.well-known/jwks.json"
+	}
+
+	// Ensure entity has no trailing slash
+	entity = strings.TrimSuffix(entity, "/")
+
+	// Replace placeholder
+	return strings.ReplaceAll(pattern, "{entity}", entity)
 }
 
 // --- Runtime configuration methods ---
