@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -238,6 +239,11 @@ func main() {
 				logger.Fatal("Failed to create whitelist registry",
 					logging.F("error", err.Error()))
 			}
+			// Start background JWKS refresh if configured
+			if err := whitelistReg.StartRefreshLoop(context.Background()); err != nil {
+				logger.Fatal("Failed to start whitelist refresh loop",
+					logging.F("error", err.Error()))
+			}
 			registryMgr.Register(whitelistReg)
 			logger.Info("Whitelist registry registered")
 		} else {
@@ -373,6 +379,12 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 					TrustedSubjects: wlCfg.TrustedSubjects,
 				}),
 			)
+		}
+
+		// Start background JWKS refresh if configured
+		if err := whitelistReg.StartRefreshLoop(context.Background()); err != nil {
+			logger.Fatal("Failed to start whitelist refresh loop",
+				logging.F("error", err.Error()))
 		}
 
 		registryMgr.Register(whitelistReg)
