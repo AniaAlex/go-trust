@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -929,5 +930,126 @@ func TestWhitelistRegistry_MultipleKeysPerEntity(t *testing.T) {
 				t.Error("expected key to be accepted")
 			}
 		})
+	}
+}
+
+func TestWhitelistRegistry_RefreshLoop(t *testing.T) {
+	// Create a key that we'll use for our "entity"
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	jwks := map[string]interface{}{
+		"keys": []interface{}{ecdsaPubKeyToJWK(&key.PublicKey, "refresh-test-key")},
+	}
+
+	// Track how many times JWKS was fetched
+	fetchCount := 0
+	var fetchMu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetchMu.Lock()
+		fetchCount++
+		fetchMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks)
+	}))
+	defer server.Close()
+
+	// Create registry with short refresh interval
+	reg := NewWhitelistRegistry(
+		WithWhitelistConfig(WhitelistConfig{
+			Issuers:         []string{server.URL},
+			AllowHTTP:       true,
+			RefreshInterval: "100ms", // Very short for testing
+		}),
+	)
+	defer reg.Close()
+
+	// Start the refresh loop
+	err := reg.StartRefreshLoop(context.Background())
+	if err != nil {
+		t.Fatalf("StartRefreshLoop failed: %v", err)
+	}
+
+	// Wait for a few refresh cycles
+	time.Sleep(350 * time.Millisecond)
+
+	// Check that multiple fetches occurred
+	fetchMu.Lock()
+	count := fetchCount
+	fetchMu.Unlock()
+
+	// Initial + at least 2 more refreshes
+	if count < 3 {
+		t.Errorf("expected at least 3 fetches, got %d", count)
+	}
+
+	// Verify registry is healthy
+	if !reg.Healthy() {
+		t.Error("expected registry to be healthy")
+	}
+
+	// Close should stop the refresh loop
+	err = reg.Close()
+	if err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+
+	// Wait a bit and check fetch count hasn't increased
+	time.Sleep(200 * time.Millisecond)
+	fetchMu.Lock()
+	finalCount := fetchCount
+	fetchMu.Unlock()
+
+	if finalCount > count+1 {
+		t.Errorf("refresh loop may not have stopped: pre-close=%d, post-close=%d", count, finalCount)
+	}
+}
+
+func TestWhitelistRegistry_RefreshLoopWithOption(t *testing.T) {
+	// Test using WithRefreshInterval option
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	jwks := map[string]interface{}{
+		"keys": []interface{}{ecdsaPubKeyToJWK(&key.PublicKey, "option-key")},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks)
+	}))
+	defer server.Close()
+
+	reg := NewWhitelistRegistry(
+		WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}),
+		WithRefreshInterval(50*time.Millisecond),
+	)
+	defer reg.Close()
+
+	// Start should use the option interval
+	err := reg.StartRefreshLoop(context.Background())
+	if err != nil {
+		t.Fatalf("StartRefreshLoop failed: %v", err)
+	}
+
+	// Verify initial refresh happened
+	time.Sleep(100 * time.Millisecond)
+	if !reg.Healthy() {
+		t.Error("expected registry to be healthy after refresh loop started")
+	}
+}
+
+func TestWhitelistRegistry_NoRefreshWithoutInterval(t *testing.T) {
+	// If no refresh interval, StartRefreshLoop should be a no-op
+	reg := NewWhitelistRegistry()
+
+	err := reg.StartRefreshLoop(context.Background())
+	if err != nil {
+		t.Fatalf("StartRefreshLoop should not fail: %v", err)
+	}
+
+	// No goroutine should be started
+	if reg.refreshStopCh != nil {
+		t.Error("refresh stop channel should be nil when no interval set")
 	}
 }

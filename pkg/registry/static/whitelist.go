@@ -53,6 +53,10 @@ type WhitelistRegistry struct {
 	// Track if keys have been loaded
 	keysLoaded  bool
 	lastRefresh time.Time
+
+	// Background refresh
+	refreshInterval time.Duration
+	refreshStopCh   chan struct{}
 }
 
 // WhitelistConfig holds the whitelist configuration.
@@ -79,6 +83,10 @@ type WhitelistConfig struct {
 
 	// AllowHTTP allows fetching JWKS over HTTP (default: false, requires HTTPS).
 	AllowHTTP bool `json:"allow_http,omitempty" yaml:"allow_http,omitempty"`
+
+	// RefreshInterval specifies how often to refresh JWKS keys (default: 0 = no refresh).
+	// Example: "5m", "1h", "30s"
+	RefreshInterval string `json:"refresh_interval,omitempty" yaml:"refresh_interval,omitempty"`
 }
 
 // WhitelistOption is a functional option for configuring WhitelistRegistry.
@@ -116,6 +124,14 @@ func WithWhitelistLogger(logger *slog.Logger) WhitelistOption {
 func WithHTTPClient(client *http.Client) WhitelistOption {
 	return func(r *WhitelistRegistry) {
 		r.httpClient = client
+	}
+}
+
+// WithRefreshInterval sets the background refresh interval for JWKS keys.
+// If set to 0 (default), no background refresh is performed.
+func WithRefreshInterval(interval time.Duration) WhitelistOption {
+	return func(r *WhitelistRegistry) {
+		r.refreshInterval = interval
 	}
 }
 
@@ -258,15 +274,83 @@ func (r *WhitelistRegistry) reloadConfig() error {
 	return nil
 }
 
-// Close stops the file watcher and releases resources.
+// Close stops the file watcher, refresh loop, and releases resources.
 func (r *WhitelistRegistry) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Stop file watcher (only once)
 	if r.stopCh != nil {
 		close(r.stopCh)
+		r.stopCh = nil
+	}
+	// Stop refresh loop (only once)
+	if r.refreshStopCh != nil {
+		close(r.refreshStopCh)
+		r.refreshStopCh = nil
 	}
 	if r.watcher != nil {
-		return r.watcher.Close()
+		err := r.watcher.Close()
+		r.watcher = nil
+		return err
 	}
 	return nil
+}
+
+// StartRefreshLoop starts a background goroutine that periodically refreshes JWKS keys.
+// This should be called after creation if background refresh is desired.
+// The loop runs until Close() is called.
+func (r *WhitelistRegistry) StartRefreshLoop(ctx context.Context) error {
+	// Parse refresh interval from config if not set via option
+	if r.refreshInterval == 0 && r.config.RefreshInterval != "" {
+		duration, err := time.ParseDuration(r.config.RefreshInterval)
+		if err != nil {
+			return fmt.Errorf("invalid refresh_interval %q: %w", r.config.RefreshInterval, err)
+		}
+		r.refreshInterval = duration
+	}
+
+	if r.refreshInterval <= 0 {
+		r.logger.Debug("refresh interval not set, skipping refresh loop")
+		return nil
+	}
+
+	// Perform initial refresh
+	if err := r.Refresh(ctx); err != nil {
+		r.logger.Warn("initial refresh failed", "error", err)
+		// Continue anyway - we'll retry on the next interval
+	}
+
+	// Start background loop
+	r.refreshStopCh = make(chan struct{})
+	go r.refreshLoop()
+
+	r.logger.Info("started JWKS refresh loop", "interval", r.refreshInterval)
+	return nil
+}
+
+// refreshLoop periodically refreshes JWKS keys.
+func (r *WhitelistRegistry) refreshLoop() {
+	ticker := time.NewTicker(r.refreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.refreshStopCh:
+			r.logger.Info("stopping JWKS refresh loop")
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			if err := r.Refresh(ctx); err != nil {
+				r.logger.Warn("scheduled refresh failed", "error", err)
+			} else {
+				r.logger.Debug("scheduled refresh completed",
+					"entities", len(r.keyHashes),
+					"total_keys", r.countTotalKeys())
+			}
+			cancel()
+		}
+	}
 }
 
 // Evaluate checks if the name-to-key binding is trusted.
