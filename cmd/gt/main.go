@@ -13,6 +13,7 @@ import (
 	"github.com/sirosfoundation/go-trust/pkg/api"
 	"github.com/sirosfoundation/go-trust/pkg/config"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
+	"github.com/sirosfoundation/go-trust/pkg/registry/didjwks"
 	"github.com/sirosfoundation/go-trust/pkg/registry/didweb"
 	"github.com/sirosfoundation/go-trust/pkg/registry/didwebvh"
 	"github.com/sirosfoundation/go-trust/pkg/registry/etsi"
@@ -548,6 +549,39 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 
 		registryMgr.Register(didwebvhReg)
 		logger.Info("did:webvh registry registered from config")
+	}
+
+	// Configure did:jwks registry from config
+	if cfg.Registries.DIDJWKS != nil && cfg.Registries.DIDJWKS.Enabled {
+		logger.Info("Configuring did:jwks registry from config file")
+		djCfg := cfg.Registries.DIDJWKS
+
+		didjwksConfig := didjwks.Config{
+			Description:          djCfg.Description,
+			InsecureSkipVerify:   djCfg.InsecureSkipVerify,
+			AllowHTTP:            djCfg.AllowHTTP,
+			DisableOIDCDiscovery: djCfg.DisableOIDCDiscovery,
+		}
+
+		// Parse Timeout if provided
+		if djCfg.Timeout != "" {
+			if timeout, err := time.ParseDuration(djCfg.Timeout); err == nil {
+				didjwksConfig.Timeout = timeout
+			} else {
+				logger.Warn("Invalid timeout for didjwks registry, using default",
+					logging.F("value", djCfg.Timeout),
+					logging.F("error", err.Error()))
+			}
+		}
+
+		didjwksReg, err := didjwks.NewRegistry(didjwksConfig)
+		if err != nil {
+			logger.Fatal("Failed to create did:jwks registry from config",
+				logging.F("error", err.Error()))
+		}
+
+		registryMgr.Register(didjwksReg)
+		logger.Info("did:jwks registry registered from config")
 	}
 
 	// Configure mDOC IACA registry from config

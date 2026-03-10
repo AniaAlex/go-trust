@@ -32,6 +32,7 @@ type RegistriesConfig struct {
 	// DID method registries
 	DIDWeb   *DIDWebRegistryConfig   `yaml:"didweb,omitempty"`
 	DIDWebVH *DIDWebVHRegistryConfig `yaml:"didwebvh,omitempty"`
+	DIDJWKS  *DIDJWKSRegistryConfig  `yaml:"didjwks,omitempty"`
 	// mDOC IACA registry
 	MDOCIACA *MDOCIACARegistryConfig `yaml:"mdociaca,omitempty"`
 	// Static test registries
@@ -118,6 +119,17 @@ type DIDWebVHRegistryConfig struct {
 	Timeout            string `yaml:"timeout,omitempty"`
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"`
 	AllowHTTP          bool   `yaml:"allow_http,omitempty"`
+}
+
+// DIDJWKSRegistryConfig contains did:jwks registry configuration.
+type DIDJWKSRegistryConfig struct {
+	Enabled              bool   `yaml:"enabled"`
+	Name                 string `yaml:"name,omitempty"`
+	Description          string `yaml:"description,omitempty"`
+	Timeout              string `yaml:"timeout,omitempty"`
+	InsecureSkipVerify   bool   `yaml:"insecure_skip_verify,omitempty"`
+	AllowHTTP            bool   `yaml:"allow_http,omitempty"`
+	DisableOIDCDiscovery bool   `yaml:"disable_oidc_discovery,omitempty"`
 }
 
 // MDOCIACARegistryConfig contains mDOC IACA registry configuration.
