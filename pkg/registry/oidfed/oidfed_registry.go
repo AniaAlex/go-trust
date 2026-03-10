@@ -577,7 +577,7 @@ func (r *OIDFedRegistry) verifyKeyBinding(req *authzen.EvaluationRequest, chain 
 			continue
 		}
 
-		if oidfedJWKsMatch(requestJWK, entityJWK) {
+		if registry.JWKsMatch(requestJWK, entityJWK) {
 			details := map[string]interface{}{
 				"matched":  true,
 				"key_type": entityJWK["kty"],
@@ -605,25 +605,7 @@ func jwkKeyToMap(key interface{}) (map[string]interface{}, error) {
 	return m, nil
 }
 
-// oidfedJWKsMatch compares two JWK maps for key material equality.
-func oidfedJWKsMatch(jwk1, jwk2 map[string]interface{}) bool {
-	kty1, ok1 := jwk1["kty"].(string)
-	kty2, ok2 := jwk2["kty"].(string)
-	if !ok1 || !ok2 || kty1 != kty2 {
-		return false
-	}
 
-	switch kty1 {
-	case "OKP":
-		return jwk1["crv"] == jwk2["crv"] && jwk1["x"] == jwk2["x"]
-	case "EC":
-		return jwk1["crv"] == jwk2["crv"] && jwk1["x"] == jwk2["x"] && jwk1["y"] == jwk2["y"]
-	case "RSA":
-		return jwk1["n"] == jwk2["n"] && jwk1["e"] == jwk2["e"]
-	default:
-		return false
-	}
-}
 
 // Info returns metadata about this registry instance, including trust anchors.
 func (r *OIDFedRegistry) Info() registry.RegistryInfo {

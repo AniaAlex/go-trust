@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	reg "github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
 func TestDidToHTTPURL(t *testing.T) {
@@ -181,8 +182,6 @@ func TestBase58btcEncode(t *testing.T) {
 }
 
 func TestJWKsMatch(t *testing.T) {
-	r, _ := NewDIDWebVHRegistry(Config{})
-
 	tests := []struct {
 		name  string
 		jwk1  map[string]interface{}
@@ -268,9 +267,9 @@ func TestJWKsMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := r.jwksMatch(tt.jwk1, tt.jwk2)
+			got := reg.JWKsMatch(tt.jwk1, tt.jwk2)
 			if got != tt.match {
-				t.Errorf("jwksMatch() = %v, want %v", got, tt.match)
+				t.Errorf("JWKsMatch() = %v, want %v", got, tt.match)
 			}
 		})
 	}

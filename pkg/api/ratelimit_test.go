@@ -170,9 +170,11 @@ func TestRateLimiter_CleanupOldLimiters(t *testing.T) {
 
 	assert.Equal(t, 3, len(rl.limiters))
 
-	// Call cleanup (currently a no-op, but test that it doesn't break)
-	rl.CleanupOldLimiters()
-
-	// Limiters should still exist (cleanup is currently a no-op)
+	// Cleanup with a long maxAge should keep all limiters
+	rl.CleanupOldLimiters(time.Hour)
 	assert.Equal(t, 3, len(rl.limiters))
+
+	// Cleanup with zero maxAge should remove all limiters
+	rl.CleanupOldLimiters(0)
+	assert.Equal(t, 0, len(rl.limiters))
 }

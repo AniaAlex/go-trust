@@ -32,14 +32,8 @@ type Policy struct {
 	MDOCIACA *MDOCIACAPolicyConstraints `json:"mdociaca,omitempty" yaml:"mdociaca,omitempty"`
 }
 
-// PolicyConstraints contains registry-agnostic trust constraints.
+// PolicyConstraints is reserved for future registry-agnostic trust constraints.
 type PolicyConstraints struct {
-	// RequireKeyBinding requires that a key be provided and validated.
-	// If false, resolution-only requests are allowed.
-	RequireKeyBinding bool `json:"require_key_binding,omitempty" yaml:"require_key_binding,omitempty"`
-
-	// AllowedKeyTypes restricts accepted key types (e.g., ["x5c", "jwk"])
-	AllowedKeyTypes []string `json:"allowed_key_types,omitempty" yaml:"allowed_key_types,omitempty"`
 }
 
 // OIDFedPolicyConstraints contains OpenID Federation-specific constraints.

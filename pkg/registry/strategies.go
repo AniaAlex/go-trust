@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -49,6 +50,12 @@ func (m *RegistryManager) evaluateFirstMatch(ctx context.Context, req *authzen.E
 		wg.Add(1)
 		go func(registry TrustRegistry) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					info := registry.Info()
+					m.circuitBreakers[info.Name].RecordFailure()
+				}
+			}()
 
 			info := registry.Info()
 
@@ -163,6 +170,16 @@ func (m *RegistryManager) evaluateAll(ctx context.Context, req *authzen.Evaluati
 		wg.Add(1)
 		go func(registry TrustRegistry) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					info := registry.Info()
+					m.circuitBreakers[info.Name].RecordFailure()
+					results <- result{
+						registry: info.Name,
+						err:      fmt.Errorf("registry panicked: %v", r),
+					}
+				}
+			}()
 
 			info := registry.Info()
 			startTime := time.Now()
@@ -350,6 +367,12 @@ func (m *RegistryManager) evaluateFirstMatchFiltered(ctx context.Context, req *a
 		wg.Add(1)
 		go func(registry TrustRegistry) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					info := registry.Info()
+					m.circuitBreakers[info.Name].RecordFailure()
+				}
+			}()
 
 			info := registry.Info()
 
@@ -454,6 +477,16 @@ func (m *RegistryManager) evaluateAllFiltered(ctx context.Context, req *authzen.
 		wg.Add(1)
 		go func(registry TrustRegistry) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					info := registry.Info()
+					m.circuitBreakers[info.Name].RecordFailure()
+					results <- result{
+						registry: info.Name,
+						err:      fmt.Errorf("registry panicked: %v", r),
+					}
+				}
+			}()
 
 			info := registry.Info()
 			startTime := time.Now()

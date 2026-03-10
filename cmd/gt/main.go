@@ -163,6 +163,13 @@ func main() {
 		logger.Info("Loaded configuration from file",
 			logging.F("file", *configFile))
 
+		// Validate configuration
+		if err := cfg.Validate(); err != nil {
+			logger.Fatal("Configuration validation failed",
+				logging.F("file", *configFile),
+				logging.F("error", err.Error()))
+		}
+
 		// Use config file values if CLI flags weren't explicitly set
 		if *host == "127.0.0.1" && cfg.Server.Host != "" {
 			*host = cfg.Server.Host
@@ -290,6 +297,11 @@ func main() {
 	}
 	r := gin.Default()
 
+	// Initialize metrics
+	metrics := api.NewMetrics()
+	serverCtx.Metrics = metrics
+	api.RegisterMetricsEndpoint(r, metrics)
+
 	// Register Swagger UI endpoint
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
@@ -300,8 +312,18 @@ func main() {
 		logging.F("address", listenAddr),
 		logging.F("swagger", fmt.Sprintf("http://%s/swagger/index.html", listenAddr)))
 
-	if err := r.Run(listenAddr); err != nil {
-		logger.Fatal("API server error", logging.F("error", err.Error()))
+	// Start server with or without TLS
+	if cfg != nil && cfg.Server.TLS.Enabled {
+		logger.Info("TLS enabled",
+			logging.F("cert", cfg.Server.TLS.CertFile),
+			logging.F("key", cfg.Server.TLS.KeyFile))
+		if err := r.RunTLS(listenAddr, cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
+			logger.Fatal("API server error", logging.F("error", err.Error()))
+		}
+	} else {
+		if err := r.Run(listenAddr); err != nil {
+			logger.Fatal("API server error", logging.F("error", err.Error()))
+		}
 	}
 }
 
@@ -580,13 +602,8 @@ func configurePoliciesFromConfig(cfg *config.Config, registryMgr *registry.Regis
 			Registries:  policyCfg.Registries,
 		}
 
-		// Convert constraints
-		if policyCfg.Constraints != nil {
-			policy.Constraints = registry.PolicyConstraints{
-				RequireKeyBinding: policyCfg.Constraints.RequireKeyBinding,
-				AllowedKeyTypes:   policyCfg.Constraints.AllowedKeyTypes,
-			}
-		}
+		// Note: policyCfg.Constraints (RequireKeyBinding, AllowedKeyTypes) are
+		// reserved for future enforcement — see design discussion.
 
 		// Convert ETSI constraints
 		if policyCfg.ETSI != nil {

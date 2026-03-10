@@ -422,65 +422,12 @@ func (r *DIDWebRegistry) matchJWK(keyArray []interface{}, didDoc *DIDDocument) (
 		}
 
 		// Compare key fields
-		if r.jwksMatch(requestJWK, vm.PublicKeyJwk) {
+		if registry.JWKsMatch(requestJWK, vm.PublicKeyJwk) {
 			return true, vm, nil
 		}
 	}
 
 	return false, nil, nil
-}
-
-// jwksMatch compares two JWKs for equality.
-func (r *DIDWebRegistry) jwksMatch(jwk1, jwk2 map[string]interface{}) bool {
-	// Compare key type
-	kty1, ok1 := jwk1["kty"].(string)
-	kty2, ok2 := jwk2["kty"].(string)
-	if !ok1 || !ok2 || kty1 != kty2 {
-		return false
-	}
-
-	// For different key types, compare the relevant fields
-	switch kty1 {
-	case "OKP", "EC":
-		// Compare curve and public key coordinates
-		crv1, _ := jwk1["crv"].(string)
-		crv2, _ := jwk2["crv"].(string)
-		if crv1 != crv2 {
-			return false
-		}
-
-		x1, _ := jwk1["x"].(string)
-		x2, _ := jwk2["x"].(string)
-		if x1 != x2 {
-			return false
-		}
-
-		// For EC keys, also compare y coordinate
-		if kty1 == "EC" {
-			y1, _ := jwk1["y"].(string)
-			y2, _ := jwk2["y"].(string)
-			if y1 != y2 {
-				return false
-			}
-		}
-
-		return true
-
-	case "RSA":
-		// Compare modulus and exponent
-		n1, _ := jwk1["n"].(string)
-		n2, _ := jwk2["n"].(string)
-		if n1 != n2 {
-			return false
-		}
-
-		e1, _ := jwk1["e"].(string)
-		e2, _ := jwk2["e"].(string)
-		return e1 == e2
-
-	default:
-		return false
-	}
 }
 
 // checkPolicyConstraints validates DID policy constraints from request context.

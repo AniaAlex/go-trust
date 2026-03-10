@@ -127,7 +127,7 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 				serverCtx.Metrics.RecordError("evaluation_error", "authzen_decision")
 			}
 
-			c.JSON(500, buildResponse(false, evalErr.Error()))
+			c.JSON(500, buildResponse(false, "internal evaluation error"))
 			return
 		}
 

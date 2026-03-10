@@ -454,32 +454,12 @@ func verifyKeyBinding(req *authzen.EvaluationRequest, didDoc *DIDDocument) (bool
 
 	for i := range didDoc.VerificationMethod {
 		vm := &didDoc.VerificationMethod[i]
-		if vm.PublicKeyJwk != nil && jwksMatch(requestJWK, vm.PublicKeyJwk) {
+		if vm.PublicKeyJwk != nil && registry.JWKsMatch(requestJWK, vm.PublicKeyJwk) {
 			return true, vm, nil
 		}
 	}
 
 	return false, nil, nil
-}
-
-// jwksMatch compares two JWK objects for key material equality.
-func jwksMatch(jwk1, jwk2 map[string]interface{}) bool {
-	kty1, _ := jwk1["kty"].(string)
-	kty2, _ := jwk2["kty"].(string)
-	if kty1 != kty2 {
-		return false
-	}
-
-	switch kty1 {
-	case "OKP":
-		return jwk1["crv"] == jwk2["crv"] && jwk1["x"] == jwk2["x"]
-	case "EC":
-		return jwk1["crv"] == jwk2["crv"] && jwk1["x"] == jwk2["x"] && jwk1["y"] == jwk2["y"]
-	case "RSA":
-		return jwk1["n"] == jwk2["n"] && jwk1["e"] == jwk2["e"]
-	default:
-		return false
-	}
 }
 
 // DIDKeyResolver implements the did:key method.

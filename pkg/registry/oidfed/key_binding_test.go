@@ -3,6 +3,8 @@ package oidfed
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
 // TestJWKKeyToMap verifies that jwkKeyToMap serializes various key-like objects.
@@ -70,8 +72,8 @@ func TestJWKKeyToMap_NonSerializable(t *testing.T) {
 	}
 }
 
-// TestOidfedJWKsMatch tests key material comparison for different key types.
-func TestOidfedJWKsMatch(t *testing.T) {
+// TestJWKsMatch tests key material comparison for different key types.
+func TestJWKsMatch(t *testing.T) {
 	tests := []struct {
 		name   string
 		jwk1   map[string]interface{}
@@ -226,9 +228,9 @@ func TestOidfedJWKsMatch(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := oidfedJWKsMatch(tc.jwk1, tc.jwk2)
+			result := registry.JWKsMatch(tc.jwk1, tc.jwk2)
 			if result != tc.expect {
-				t.Errorf("oidfedJWKsMatch() = %v, want %v", result, tc.expect)
+				t.Errorf("JWKsMatch() = %v, want %v", result, tc.expect)
 			}
 		})
 	}
@@ -267,9 +269,9 @@ func TestJWKKeyToMap_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestOidfedJWKsMatch_EmptyMaps verifies comparison of empty maps.
-func TestOidfedJWKsMatch_EmptyMaps(t *testing.T) {
-	result := oidfedJWKsMatch(map[string]interface{}{}, map[string]interface{}{})
+// TestJWKsMatch_EmptyMaps verifies comparison of empty maps.
+func TestJWKsMatch_EmptyMaps(t *testing.T) {
+	result := registry.JWKsMatch(map[string]interface{}{}, map[string]interface{}{})
 	if result {
 		t.Error("expected false for empty maps (no kty)")
 	}

@@ -168,6 +168,20 @@ func (r *Registry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest)
 		}
 	}
 
+	// Enforce require_iaca_endpoint policy: pre-check that issuer publishes mdoc_iacas_uri
+	if req.Context != nil {
+		if reqIACA, ok := req.Context["require_iaca_endpoint"].(bool); ok && reqIACA {
+			metadataURL := issuerURL + "/.well-known/openid-credential-issuer"
+			metadata, err := r.fetchMetadata(ctx, metadataURL)
+			if err != nil {
+				return r.denyWithReason(fmt.Sprintf("cannot verify IACA endpoint: %v", err)), nil
+			}
+			if metadata.MdocIacasURI == "" {
+				return r.denyWithReason("issuer does not publish mdoc_iacas_uri (required by policy)"), nil
+			}
+		}
+	}
+
 	// Parse X5C chain from resource.key
 	chain, err := r.parseX5CChain(req.Resource.Key)
 	if err != nil {

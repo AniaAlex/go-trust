@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	reg "github.com/sirosfoundation/go-trust/pkg/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -367,7 +368,7 @@ func TestJWKsMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := jwksMatch(tt.jwk1, tt.jwk2)
+			result := reg.JWKsMatch(tt.jwk1, tt.jwk2)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

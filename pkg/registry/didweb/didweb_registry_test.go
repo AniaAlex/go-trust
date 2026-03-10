@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
+	reg "github.com/sirosfoundation/go-trust/pkg/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,8 +81,6 @@ func TestDIDToHTTPURL(t *testing.T) {
 
 // TestJWKsMatch tests the JWK comparison logic
 func TestJWKsMatch(t *testing.T) {
-	registry := &DIDWebRegistry{}
-
 	tests := []struct {
 		name     string
 		jwk1     map[string]interface{}
@@ -165,7 +164,7 @@ func TestJWKsMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := registry.jwksMatch(tt.jwk1, tt.jwk2)
+			result := reg.JWKsMatch(tt.jwk1, tt.jwk2)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
