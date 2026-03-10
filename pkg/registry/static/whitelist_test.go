@@ -1485,7 +1485,7 @@ func TestWhitelistRegistry_RefreshLoopWithOption(t *testing.T) {
 }
 
 func TestWhitelistRegistry_NoRefreshWithoutInterval(t *testing.T) {
-	// If no refresh interval, StartRefreshLoop should be a no-op
+	// If no refresh interval, StartRefreshLoop should be a no-op for the background loop
 	reg := NewWhitelistRegistry()
 
 	err := reg.StartRefreshLoop(context.Background())
@@ -1496,5 +1496,67 @@ func TestWhitelistRegistry_NoRefreshWithoutInterval(t *testing.T) {
 	// No goroutine should be started
 	if reg.refreshStopCh != nil {
 		t.Error("refresh stop channel should be nil when no interval set")
+	}
+}
+
+func TestWhitelistRegistry_InitialRefreshWithoutInterval(t *testing.T) {
+	// Regression test: StartRefreshLoop without refresh_interval must still
+	// perform initial JWKS fetch so that key binding works on first request.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	jwks := map[string]interface{}{
+		"keys": []interface{}{ecdsaPubKeyToJWK(&key.PublicKey, "init-test-key")},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks)
+	}))
+	defer server.Close()
+
+	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+		Issuers:   []string{server.URL},
+		AllowHTTP: true,
+		// No RefreshInterval set — this is the bug scenario
+	}))
+
+	// StartRefreshLoop should perform initial refresh even without interval
+	err := reg.StartRefreshLoop(context.Background())
+	if err != nil {
+		t.Fatalf("StartRefreshLoop failed: %v", err)
+	}
+
+	// Keys should be loaded despite no refresh interval
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{ID: server.URL},
+		Action:  &authzen.Action{Name: "pid-provider"},
+		Resource: authzen.Resource{
+			Type: "jwk",
+			Key:  []interface{}{ecdsaPubKeyToJWK(&key.PublicKey, "init-test-key")},
+		},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Decision {
+		reason := ""
+		if resp.Context != nil && resp.Context.Reason != nil {
+			reason = fmt.Sprintf("%v", resp.Context.Reason)
+		}
+		t.Errorf("expected issuer to be trusted after StartRefreshLoop without interval, got deny: %s", reason)
+	}
+
+	// Verify response includes user reason and trust_framework
+	if resp.Context == nil {
+		t.Fatal("expected response context")
+	}
+	if resp.Context.Reason["user"] == nil {
+		t.Error("expected Reason['user'] to be set")
+	}
+	if meta, ok := resp.Context.TrustMetadata.(map[string]interface{}); !ok {
+		t.Error("expected TrustMetadata to be set")
+	} else if meta["trust_framework"] != "whitelist" {
+		t.Errorf("expected trust_framework='whitelist', got %v", meta["trust_framework"])
 	}
 }

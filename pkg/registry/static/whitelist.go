@@ -317,15 +317,15 @@ func (r *WhitelistRegistry) StartRefreshLoop(ctx context.Context) error {
 		r.refreshInterval = duration
 	}
 
-	if r.refreshInterval <= 0 {
-		r.logger.Debug("refresh interval not set, skipping refresh loop")
-		return nil
-	}
-
-	// Perform initial refresh
+	// Always perform initial refresh to load JWKS keys on startup
 	if err := r.Refresh(ctx); err != nil {
 		r.logger.Warn("initial refresh failed", "error", err)
-		// Continue anyway - we'll retry on the next interval
+		// Continue anyway - keys may be fetched later via background loop
+	}
+
+	if r.refreshInterval <= 0 {
+		r.logger.Info("refresh interval not set, no background refresh loop")
+		return nil
 	}
 
 	// Start background loop
@@ -469,11 +469,17 @@ func (r *WhitelistRegistry) allowWithKey(subject, role, matchedList, keyFingerpr
 		Decision: true,
 		Context: &authzen.EvaluationResponseContext{
 			Reason: map[string]interface{}{
+				"user":            fmt.Sprintf("trusted via whitelist (%s)", matchedList),
 				"registry":        r.name,
 				"type":            "whitelist",
 				"role":            role,
 				"matched_list":    matchedList,
 				"key_fingerprint": keyFingerprint,
+			},
+			TrustMetadata: map[string]interface{}{
+				"trust_framework": "whitelist",
+				"registry":        r.name,
+				"matched_list":    matchedList,
 			},
 		},
 	}, nil
@@ -484,11 +490,17 @@ func (r *WhitelistRegistry) allowResolutionOnly(subject, role, matchedList strin
 		Decision: true,
 		Context: &authzen.EvaluationResponseContext{
 			Reason: map[string]interface{}{
+				"user":            fmt.Sprintf("trusted via whitelist (%s, resolution only)", matchedList),
 				"registry":        r.name,
 				"type":            "whitelist",
 				"role":            role,
 				"matched_list":    matchedList,
 				"resolution_only": true,
+			},
+			TrustMetadata: map[string]interface{}{
+				"trust_framework": "whitelist",
+				"registry":        r.name,
+				"matched_list":    matchedList,
 			},
 		},
 	}, nil
@@ -499,9 +511,15 @@ func (r *WhitelistRegistry) deny(subject, reason string) (*authzen.EvaluationRes
 		Decision: false,
 		Context: &authzen.EvaluationResponseContext{
 			Reason: map[string]interface{}{
+				"user":     reason,
+				"admin":    reason,
 				"registry": r.name,
 				"type":     "whitelist",
 				"error":    reason,
+			},
+			TrustMetadata: map[string]interface{}{
+				"trust_framework": "whitelist",
+				"registry":        r.name,
 			},
 		},
 	}, nil
