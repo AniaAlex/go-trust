@@ -16,6 +16,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -495,10 +496,41 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 	}
 
 	// For full evaluation, check key binding if provided
+	matched, matchDetails, err := r.verifyKeyBinding(req, chain)
+	if err != nil {
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"message":   "key binding verification failed",
+					"entity_id": entityID,
+					"error":     err.Error(),
+				},
+				TrustMetadata: trustMetadata,
+			},
+		}, nil
+	}
+
+	if !matched {
+		return &authzen.EvaluationResponse{
+			Decision: false,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"message":            "key does not match any key in entity JWKS",
+					"entity_id":          entityID,
+					"trust_chain_length": len(chain),
+					"trust_anchor":       r.getTrustAnchorID(chain),
+				},
+				TrustMetadata: trustMetadata,
+			},
+		}, nil
+	}
+
 	reasonData := map[string]interface{}{
 		"entity_id":          entityID,
 		"trust_chain_length": len(chain),
 		"trust_anchor":       r.getTrustAnchorID(chain),
+		"key_binding":        matchDetails,
 	}
 
 	return &authzen.EvaluationResponse{
@@ -508,6 +540,89 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 			TrustMetadata: trustMetadata,
 		},
 	}, nil
+}
+
+// verifyKeyBinding checks if the key in the request matches a key in the entity's JWKS.
+// Returns (matched, matchDetails, error).
+func (r *OIDFedRegistry) verifyKeyBinding(req *authzen.EvaluationRequest, chain oidfed.TrustChain) (bool, map[string]interface{}, error) {
+	if len(chain) == 0 {
+		return false, nil, fmt.Errorf("empty trust chain")
+	}
+
+	leafStatement := chain[0]
+	if leafStatement.JWKS.Set == nil || leafStatement.JWKS.Len() == 0 {
+		return false, nil, fmt.Errorf("entity has no JWKS")
+	}
+
+	if len(req.Resource.Key) == 0 {
+		return false, nil, fmt.Errorf("resource.key is empty")
+	}
+
+	// Extract the request key as a JWK map
+	requestJWK, ok := req.Resource.Key[0].(map[string]interface{})
+	if !ok {
+		return false, nil, fmt.Errorf("resource.key[0] must be a JWK object")
+	}
+
+	// Compare against each key in the entity's JWKS
+	for i := 0; i < leafStatement.JWKS.Len(); i++ {
+		key, keyOk := leafStatement.JWKS.Key(i)
+		if !keyOk {
+			continue
+		}
+
+		// Serialize the JWKS key to JSON, then parse as map for comparison
+		entityJWK, err := jwkKeyToMap(key)
+		if err != nil {
+			continue
+		}
+
+		if oidfedJWKsMatch(requestJWK, entityJWK) {
+			details := map[string]interface{}{
+				"matched":  true,
+				"key_type": entityJWK["kty"],
+			}
+			if kid, kidOk := entityJWK["kid"].(string); kidOk {
+				details["kid"] = kid
+			}
+			return true, details, nil
+		}
+	}
+
+	return false, nil, nil
+}
+
+// jwkKeyToMap serializes a jwk.Key to a map[string]interface{} for comparison.
+func jwkKeyToMap(key interface{}) (map[string]interface{}, error) {
+	data, err := json.Marshal(key)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// oidfedJWKsMatch compares two JWK maps for key material equality.
+func oidfedJWKsMatch(jwk1, jwk2 map[string]interface{}) bool {
+	kty1, ok1 := jwk1["kty"].(string)
+	kty2, ok2 := jwk2["kty"].(string)
+	if !ok1 || !ok2 || kty1 != kty2 {
+		return false
+	}
+
+	switch kty1 {
+	case "OKP":
+		return jwk1["crv"] == jwk2["crv"] && jwk1["x"] == jwk2["x"]
+	case "EC":
+		return jwk1["crv"] == jwk2["crv"] && jwk1["x"] == jwk2["x"] && jwk1["y"] == jwk2["y"]
+	case "RSA":
+		return jwk1["n"] == jwk2["n"] && jwk1["e"] == jwk2["e"]
+	default:
+		return false
+	}
 }
 
 // Info returns metadata about this registry instance, including trust anchors.

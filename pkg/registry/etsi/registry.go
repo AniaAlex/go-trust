@@ -548,8 +548,101 @@ func base64Decode(s string) ([]byte, error) {
 	return base64.URLEncoding.DecodeString(s)
 }
 
+// buildFilteredCertPool builds a certificate pool filtered by service types and statuses.
+// If no service types or statuses are specified in the request context, the full unfiltered pool is returned.
+// When service types and/or statuses are provided (via policy mapping), only certificates from
+// TSL services matching those constraints are included.
+func (r *TSLRegistry) buildFilteredCertPool(req *authzen.EvaluationRequest) (*x509.CertPool, string) {
+	// Check if we have TSLs to filter from
+	if len(r.tsls) == 0 {
+		// No TSLs loaded - use the pre-built cert pool (from PEM bundle)
+		return r.certPool, "unfiltered (pem bundle)"
+	}
+
+	// Extract service type and status constraints from request context
+	var serviceTypes []string
+	var serviceStatuses []string
+
+	if req.Context != nil {
+		if v, ok := req.Context["service_types"]; ok {
+			switch st := v.(type) {
+			case []string:
+				serviceTypes = st
+			case []interface{}:
+				for _, s := range st {
+					if str, ok := s.(string); ok {
+						serviceTypes = append(serviceTypes, str)
+					}
+				}
+			}
+		}
+		if v, ok := req.Context["service_statuses"]; ok {
+			switch ss := v.(type) {
+			case []string:
+				serviceStatuses = ss
+			case []interface{}:
+				for _, s := range ss {
+					if str, ok := s.(string); ok {
+						serviceStatuses = append(serviceStatuses, str)
+					}
+				}
+			}
+		}
+	}
+
+	// If no filtering constraints, return the full pre-built pool
+	if len(serviceTypes) == 0 && len(serviceStatuses) == 0 {
+		return r.certPool, "unfiltered"
+	}
+
+	// Build a TSPServicePolicy with the requested constraints
+	policy := etsi119612.NewTSPServicePolicy()
+	if len(serviceTypes) > 0 {
+		for _, st := range serviceTypes {
+			policy.AddServiceTypeIdentifier(st)
+		}
+	}
+	if len(serviceStatuses) > 0 {
+		// Replace the default "granted" status with explicit statuses
+		policy.ServiceStatus = serviceStatuses
+	}
+
+	// Build filtered cert pool from all loaded TSLs
+	filteredPool := x509.NewCertPool()
+	for _, tsl := range r.tsls {
+		tslPool := tsl.ToCertPoolWithReferences(policy)
+		// Merge TSL pool into filtered pool by extracting subjects
+		// Note: x509.CertPool doesn't expose certs directly, so we re-extract from TSL
+		tsl.WithTrustServices(func(tsp *etsi119612.TSPType, svc *etsi119612.TSPServiceType) {
+			if tsp.Validate(svc, nil, policy) == nil {
+				svc.WithCertificates(func(cert *x509.Certificate) {
+					filteredPool.AddCert(cert)
+				})
+			}
+		})
+		// Also process referenced TSLs
+		for _, refTsl := range tsl.Referenced {
+			if refTsl != nil {
+				refTsl.WithTrustServices(func(tsp *etsi119612.TSPType, svc *etsi119612.TSPServiceType) {
+					if tsp.Validate(svc, nil, policy) == nil {
+						svc.WithCertificates(func(cert *x509.Certificate) {
+							filteredPool.AddCert(cert)
+						})
+					}
+				})
+			}
+		}
+		_ = tslPool // tslPool was used for reference; we built filteredPool directly
+	}
+
+	filterDesc := fmt.Sprintf("filtered(service_types=%v, service_statuses=%v)", serviceTypes, serviceStatuses)
+	return filteredPool, filterDesc
+}
+
 // Evaluate implements TrustRegistry.Evaluate by validating X.509 certificates
-// against the loaded certificate pool.
+// against a certificate pool derived from the loaded TSLs.
+// When policy constraints (service_types, service_statuses) are present in req.Context,
+// the cert pool is dynamically filtered to include only certificates from matching TSL services.
 func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -608,8 +701,9 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 		}, nil
 	}
 
-	// Validate certificate chain against cert pool
-	if r.certPool == nil {
+	// Build (possibly filtered) cert pool based on policy constraints in request context
+	pool, poolDesc := r.buildFilteredCertPool(req)
+	if pool == nil {
 		return &authzen.EvaluationResponse{
 			Decision: false,
 			Context: &authzen.EvaluationResponseContext{
@@ -622,7 +716,7 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 
 	start := time.Now()
 	opts := x509.VerifyOptions{
-		Roots: r.certPool,
+		Roots: pool,
 	}
 
 	// Add intermediate certificates if provided in the chain
@@ -645,6 +739,7 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 				Reason: map[string]interface{}{
 					"error":         err.Error(),
 					"validation_ms": validationDuration.Milliseconds(),
+					"pool_filter":   poolDesc,
 				},
 			},
 		}, nil
@@ -688,6 +783,7 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 				"validation_ms": validationDuration.Milliseconds(),
 				"chain_length":  len(chains),
 				"data_loaded":   r.loadedAt.Format(time.RFC3339),
+				"pool_filter":   poolDesc,
 			},
 		},
 	}, nil

@@ -231,6 +231,11 @@ func (r *DIDWebVHRegistry) Evaluate(ctx context.Context, req *authzen.Evaluation
 		}, nil
 	}
 
+	// Check policy constraints from request context (set by policy mapper)
+	if denial := r.checkPolicyConstraints(req, didDoc, baseDID, startTime); denial != nil {
+		return denial, nil
+	}
+
 	// Check if this is a resolution-only request
 	if req.IsResolutionOnlyRequest() {
 		return r.buildResolutionOnlyResponse(didDoc, metadata, startTime), nil
@@ -1048,6 +1053,134 @@ func (r *DIDWebVHRegistry) jwksMatch(jwk1, jwk2 map[string]interface{}) bool {
 }
 
 // SupportedResourceTypes returns the resource types this registry can handle.
+// checkPolicyConstraints validates DID policy constraints from request context.
+// These constraints are injected by the policy mapper based on role (action.name).
+func (r *DIDWebVHRegistry) checkPolicyConstraints(req *authzen.EvaluationRequest, didDoc *DIDDocument, baseDID string, startTime time.Time) *authzen.EvaluationResponse {
+	if req.Context == nil {
+		return nil
+	}
+
+	// Check allowed_domains: restrict DIDs to specific domains
+	if allowedDomains := extractStringSliceFromContext(req.Context, "allowed_domains"); len(allowedDomains) > 0 {
+		domain := extractDomainFromDIDWebVH(baseDID)
+		if !matchesDomainPattern(domain, allowedDomains) {
+			return &authzen.EvaluationResponse{
+				Decision: false,
+				Context: &authzen.EvaluationResponseContext{
+					Reason: map[string]interface{}{
+						"error":           "DID domain not in allowed domains for this role",
+						"domain":          domain,
+						"allowed_domains": allowedDomains,
+						"resolution_ms":   time.Since(startTime).Milliseconds(),
+					},
+				},
+			}
+		}
+	}
+
+	// Check required_services: DID document must have specific service types
+	if requiredServices := extractStringSliceFromContext(req.Context, "required_services"); len(requiredServices) > 0 {
+		if !didDocHasRequiredServices(didDoc.Service, requiredServices) {
+			return &authzen.EvaluationResponse{
+				Decision: false,
+				Context: &authzen.EvaluationResponseContext{
+					Reason: map[string]interface{}{
+						"error":             "DID document missing required services for this role",
+						"required_services": requiredServices,
+						"resolution_ms":     time.Since(startTime).Milliseconds(),
+					},
+				},
+			}
+		}
+	}
+
+	return nil
+}
+
+// extractStringSliceFromContext extracts a []string from a context map value.
+func extractStringSliceFromContext(ctx map[string]interface{}, key string) []string {
+	v, ok := ctx[key]
+	if !ok {
+		return nil
+	}
+	switch s := v.(type) {
+	case []string:
+		return s
+	case []interface{}:
+		result := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// extractDomainFromDIDWebVH extracts the domain from a did:webvh identifier.
+// Format: did:webvh:<scid>:<domain>[:path...]
+func extractDomainFromDIDWebVH(did string) string {
+	if !strings.HasPrefix(did, "did:webvh:") {
+		return ""
+	}
+	rest := strings.TrimPrefix(did, "did:webvh:")
+	// Skip SCID (first component), domain is second
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	domain := parts[1]
+	domain = strings.ReplaceAll(domain, "%3A", ":")
+	domain = strings.ReplaceAll(domain, "%3a", ":")
+	return domain
+}
+
+// matchesDomainPattern checks if a domain matches any of the allowed domains.
+// Supports wildcards: "*.example.com" matches "sub.example.com".
+func matchesDomainPattern(domain string, allowedDomains []string) bool {
+	for _, allowed := range allowedDomains {
+		if allowed == domain {
+			return true
+		}
+		if strings.HasPrefix(allowed, "*.") {
+			suffix := allowed[1:] // ".example.com"
+			if strings.HasSuffix(domain, suffix) && domain != suffix[1:] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// didDocHasRequiredServices checks if the DID document services include all required service types.
+func didDocHasRequiredServices(service interface{}, requiredTypes []string) bool {
+	if service == nil {
+		return false
+	}
+
+	services, ok := service.([]interface{})
+	if !ok {
+		return false
+	}
+
+	presentTypes := make(map[string]bool)
+	for _, svc := range services {
+		if svcMap, ok := svc.(map[string]interface{}); ok {
+			if svcType, ok := svcMap["type"].(string); ok {
+				presentTypes[svcType] = true
+			}
+		}
+	}
+
+	for _, required := range requiredTypes {
+		if !presentTypes[required] {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *DIDWebVHRegistry) SupportedResourceTypes() []string {
 	return []string{"jwk"}
 }

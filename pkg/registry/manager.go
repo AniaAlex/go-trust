@@ -162,6 +162,34 @@ func (m *RegistryManager) applyPolicyToRequest(req *authzen.EvaluationRequest, p
 		}
 	}
 
+	// Apply DID constraints
+	if policyCtx.Policy.DID != nil {
+		didPolicy := policyCtx.Policy.DID
+		if len(didPolicy.AllowedDomains) > 0 {
+			req.Context["allowed_domains"] = didPolicy.AllowedDomains
+		}
+		if len(didPolicy.RequiredVerificationMethods) > 0 {
+			req.Context["required_verification_methods"] = didPolicy.RequiredVerificationMethods
+		}
+		if len(didPolicy.RequiredServices) > 0 {
+			req.Context["required_services"] = didPolicy.RequiredServices
+		}
+		if didPolicy.RequireVerifiableHistory {
+			req.Context["require_verifiable_history"] = true
+		}
+	}
+
+	// Apply mDOC IACA constraints
+	if policyCtx.Policy.MDOCIACA != nil {
+		mdoc := policyCtx.Policy.MDOCIACA
+		if len(mdoc.IssuerAllowlist) > 0 {
+			req.Context["issuer_allowlist"] = mdoc.IssuerAllowlist
+		}
+		if mdoc.RequireIACAEndpoint {
+			req.Context["require_iaca_endpoint"] = true
+		}
+	}
+
 	// Store policy name in context for debugging/logging
 	req.Context["_policy"] = policyCtx.Policy.Name
 }

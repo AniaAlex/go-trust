@@ -552,7 +552,7 @@ func TestWhitelistRegistry_KeyBindingVerification(t *testing.T) {
 
 	// Create whitelist registry with the test server's URL
 	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
-		Issuers: []string{server.URL},
+		Issuers:   []string{server.URL},
 		AllowHTTP: true, // Allow HTTP for test server
 	}))
 

@@ -132,6 +132,9 @@ func New(cfg *Config) (*Registry, error) {
 
 // Evaluate verifies an X5C certificate chain against IACA certificates
 // fetched from the issuer's mdoc_iacas_uri endpoint.
+// Policy constraints from req.Context (set by the policy mapper) are also enforced:
+//   - issuer_allowlist: additional issuer restrictions per-role
+//   - require_iaca_endpoint: require the issuer to publish mdoc_iacas_uri
 func (r *Registry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	// Extract issuer URL from subject.id
 	issuerURL := req.Subject.ID
@@ -142,10 +145,26 @@ func (r *Registry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest)
 	// Normalize issuer URL
 	issuerURL = strings.TrimSuffix(issuerURL, "/")
 
-	// Check allowlist if configured
+	// Check static allowlist from config
 	if len(r.allowlist) > 0 {
 		if _, ok := r.allowlist[issuerURL]; !ok {
 			return r.denyWithReason("issuer not in allowlist"), nil
+		}
+	}
+
+	// Check dynamic allowlist from policy context (role-based)
+	if req.Context != nil {
+		if policyAllowlist := extractIssuerAllowlist(req.Context); len(policyAllowlist) > 0 {
+			found := false
+			for _, allowed := range policyAllowlist {
+				if strings.TrimSuffix(allowed, "/") == issuerURL {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return r.denyWithReason("issuer not in policy allowlist for this role"), nil
+			}
 		}
 	}
 
@@ -182,6 +201,27 @@ func (r *Registry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest)
 	}
 
 	return r.denyWithReason("certificate chain not trusted by any IACA"), nil
+}
+
+// extractIssuerAllowlist extracts issuer_allowlist from request context.
+func extractIssuerAllowlist(ctx map[string]interface{}) []string {
+	v, ok := ctx["issuer_allowlist"]
+	if !ok {
+		return nil
+	}
+	switch s := v.(type) {
+	case []string:
+		return s
+	case []interface{}:
+		result := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
+	}
+	return nil
 }
 
 // SupportedResourceTypes returns the resource types this registry handles.
