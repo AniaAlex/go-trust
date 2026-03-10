@@ -63,11 +63,15 @@ type ETSIRegistryConfig struct {
 
 // WhitelistRegistryConfig contains whitelist registry configuration.
 type WhitelistRegistryConfig struct {
-	Enabled         bool     `yaml:"enabled"`
-	Name            string   `yaml:"name"`
-	Description     string   `yaml:"description"`
-	ConfigFile      string   `yaml:"config_file,omitempty"`
-	WatchFile       bool     `yaml:"watch_file"`
+	Enabled     bool   `yaml:"enabled"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	ConfigFile  string `yaml:"config_file,omitempty"`
+	WatchFile   bool   `yaml:"watch_file"`
+	// Named lists (new format)
+	Lists   map[string][]string `yaml:"lists,omitempty"`
+	Actions map[string]string   `yaml:"actions,omitempty"`
+	// Legacy fields (backward compatible)
 	Issuers         []string `yaml:"issuers,omitempty"`
 	Verifiers       []string `yaml:"verifiers,omitempty"`
 	TrustedSubjects []string `yaml:"trusted_subjects,omitempty"`

@@ -22,6 +22,10 @@ import (
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
 
+// DefaultRefreshInterval is the default JWKS refresh interval when none is configured.
+// This ensures keys are always periodically refreshed for security.
+const DefaultRefreshInterval = 5 * time.Minute
+
 // WhitelistRegistry is a TrustRegistry that maintains a whitelist of trusted subjects
 // and validates name-to-key bindings by fetching and caching entity JWKS.
 //
@@ -36,6 +40,13 @@ type WhitelistRegistry struct {
 
 	mu     sync.RWMutex
 	config WhitelistConfig
+
+	// resolvedLists is the merged view of Lists + legacy Issuers/Verifiers/TrustedSubjects.
+	// Key is list name, value is list of entity IDs/patterns.
+	resolvedLists map[string][]string
+
+	// resolvedActions maps action name -> list name.
+	resolvedActions map[string]string
 
 	// keyHashes maps entity ID to a set of allowed key fingerprints.
 	// Each entity can have multiple keys (key rotation, different purposes).
@@ -61,17 +72,29 @@ type WhitelistRegistry struct {
 
 // WhitelistConfig holds the whitelist configuration.
 type WhitelistConfig struct {
+	// Lists is a map of named entity lists. Each key is a list name and the
+	// value is a slice of entity URLs/identifiers (supports wildcards).
+	// Use together with Actions to map action names to lists.
+	Lists map[string][]string `json:"lists,omitempty" yaml:"lists,omitempty"`
+
+	// Actions maps action names (from request action.name) to list names.
+	// For example: {"pid-provider": "pid-issuers", "verifier": "verifiers"}
+	Actions map[string]string `json:"actions,omitempty" yaml:"actions,omitempty"`
+
+	// --- Legacy fields (backward compatible) ---
+	// When Lists/Actions are not set, these are used to build implicit lists.
+	// Legacy "issuers" maps to actions: issuer, credential-issuer, pid-provider.
+	// Legacy "verifiers" maps to actions: verifier, credential-verifier.
+
 	// Issuers is a list of trusted credential issuer URLs/identifiers.
-	// The registry will fetch JWKS from each issuer's well-known endpoint.
-	Issuers []string `json:"issuers" yaml:"issuers"`
+	Issuers []string `json:"issuers,omitempty" yaml:"issuers,omitempty"`
 
 	// Verifiers is a list of trusted verifier URLs/identifiers.
-	// The registry will fetch JWKS from each verifier's well-known endpoint.
-	Verifiers []string `json:"verifiers" yaml:"verifiers"`
+	Verifiers []string `json:"verifiers,omitempty" yaml:"verifiers,omitempty"`
 
 	// TrustedSubjects is a catch-all for subjects that should be trusted
-	// regardless of role. This is checked if role-specific lists don't match.
-	TrustedSubjects []string `json:"trusted_subjects" yaml:"trusted_subjects"`
+	// regardless of role. This is checked if no action-specific list matches.
+	TrustedSubjects []string `json:"trusted_subjects,omitempty" yaml:"trusted_subjects,omitempty"`
 
 	// JWKSEndpointPattern specifies an explicit URL pattern for fetching JWKS.
 	// When set, metadata discovery is skipped and this pattern is used directly.
@@ -91,7 +114,8 @@ type WhitelistConfig struct {
 	// AllowHTTP allows fetching JWKS over HTTP (default: false, requires HTTPS).
 	AllowHTTP bool `json:"allow_http,omitempty" yaml:"allow_http,omitempty"`
 
-	// RefreshInterval specifies how often to refresh JWKS keys (default: 0 = no refresh).
+	// RefreshInterval specifies how often to refresh JWKS keys.
+	// Default: 5m (5 minutes). Set to "0" to disable background refresh.
 	// Example: "5m", "1h", "30s"
 	RefreshInterval string `json:"refresh_interval,omitempty" yaml:"refresh_interval,omitempty"`
 }
@@ -159,7 +183,67 @@ func NewWhitelistRegistry(opts ...WhitelistOption) *WhitelistRegistry {
 		opt(r)
 	}
 
+	r.resolveConfig()
+
 	return r
+}
+
+// resolveConfig builds the resolved lists and action mappings from the config.
+// It merges the new Lists/Actions format with legacy Issuers/Verifiers/TrustedSubjects.
+func (r *WhitelistRegistry) resolveConfig() {
+	r.resolvedLists = make(map[string][]string)
+	r.resolvedActions = make(map[string]string)
+
+	// Copy explicit lists
+	for name, entries := range r.config.Lists {
+		r.resolvedLists[name] = entries
+	}
+
+	// Copy explicit action mappings
+	for action, listName := range r.config.Actions {
+		r.resolvedActions[strings.ToLower(action)] = listName
+	}
+
+	// Merge legacy issuers into resolved lists and default action mappings
+	if len(r.config.Issuers) > 0 {
+		r.resolvedLists["issuers"] = appendUnique(r.resolvedLists["issuers"], r.config.Issuers)
+		// Only add default mappings if not already explicitly configured
+		for _, action := range []string{"issuer", "credential-issuer", "pid-provider"} {
+			if _, exists := r.resolvedActions[action]; !exists {
+				r.resolvedActions[action] = "issuers"
+			}
+		}
+	}
+
+	// Merge legacy verifiers
+	if len(r.config.Verifiers) > 0 {
+		r.resolvedLists["verifiers"] = appendUnique(r.resolvedLists["verifiers"], r.config.Verifiers)
+		for _, action := range []string{"verifier", "credential-verifier"} {
+			if _, exists := r.resolvedActions[action]; !exists {
+				r.resolvedActions[action] = "verifiers"
+			}
+		}
+	}
+
+	// Merge legacy trusted_subjects
+	if len(r.config.TrustedSubjects) > 0 {
+		r.resolvedLists["trusted_subjects"] = appendUnique(r.resolvedLists["trusted_subjects"], r.config.TrustedSubjects)
+	}
+}
+
+// appendUnique appends items to a slice, skipping duplicates.
+func appendUnique(existing, items []string) []string {
+	seen := make(map[string]bool, len(existing))
+	for _, e := range existing {
+		seen[e] = true
+	}
+	for _, item := range items {
+		if !seen[item] {
+			existing = append(existing, item)
+			seen[item] = true
+		}
+	}
+	return existing
 }
 
 // NewWhitelistRegistryFromFile creates a whitelist registry from a config file.
@@ -272,12 +356,12 @@ func (r *WhitelistRegistry) reloadConfig() error {
 
 	r.mu.Lock()
 	r.config = cfg
+	r.resolveConfig()
 	r.mu.Unlock()
 
 	r.logger.Info("config reloaded",
-		"issuers", len(cfg.Issuers),
-		"verifiers", len(cfg.Verifiers),
-		"trusted_subjects", len(cfg.TrustedSubjects))
+		"lists", len(r.resolvedLists),
+		"actions", len(r.resolvedActions))
 	return nil
 }
 
@@ -317,15 +401,15 @@ func (r *WhitelistRegistry) StartRefreshLoop(ctx context.Context) error {
 		r.refreshInterval = duration
 	}
 
+	// Apply default refresh interval if not explicitly configured
+	if r.refreshInterval == 0 {
+		r.refreshInterval = DefaultRefreshInterval
+	}
+
 	// Always perform initial refresh to load JWKS keys on startup
 	if err := r.Refresh(ctx); err != nil {
 		r.logger.Warn("initial refresh failed", "error", err)
 		// Continue anyway - keys may be fetched later via background loop
-	}
-
-	if r.refreshInterval <= 0 {
-		r.logger.Info("refresh interval not set, no background refresh loop")
-		return nil
 	}
 
 	// Start background loop
@@ -370,31 +454,31 @@ func (r *WhitelistRegistry) Evaluate(ctx context.Context, req *authzen.Evaluatio
 	subjectID := req.Subject.ID
 	role := r.extractRole(req)
 
-	// First check if subject is in whitelist
+	// Look up which list this action maps to
 	var matchedList string
 	var inWhitelist bool
 
-	switch role {
-	case "issuer", "credential-issuer", "pid-provider":
-		if r.matchesList(subjectID, r.config.Issuers) {
-			inWhitelist = true
-			matchedList = "issuers"
-		}
-	case "verifier", "credential-verifier":
-		if r.matchesList(subjectID, r.config.Verifiers) {
-			inWhitelist = true
-			matchedList = "verifiers"
+	if listName, ok := r.resolvedActions[role]; ok {
+		if entries, ok := r.resolvedLists[listName]; ok {
+			if r.matchesList(subjectID, entries) {
+				inWhitelist = true
+				matchedList = listName
+			}
 		}
 	}
 
-	// Check catch-all trusted subjects
-	if !inWhitelist && r.matchesList(subjectID, r.config.TrustedSubjects) {
-		inWhitelist = true
-		matchedList = "trusted_subjects"
+	// Fall back to trusted_subjects catch-all
+	if !inWhitelist {
+		if entries, ok := r.resolvedLists["trusted_subjects"]; ok {
+			if r.matchesList(subjectID, entries) {
+				inWhitelist = true
+				matchedList = "trusted_subjects"
+			}
+		}
 	}
 
 	if !inWhitelist {
-		return r.deny(subjectID, fmt.Sprintf("subject not in whitelist for role '%s'", role))
+		return r.deny(subjectID, fmt.Sprintf("subject not in whitelist for action '%s'", role))
 	}
 
 	// If this is a resolution-only request (no key provided), allow based on whitelist membership
@@ -564,21 +648,13 @@ func (r *WhitelistRegistry) Refresh(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Collect all unique entities
+	// Collect all unique entities from all resolved lists
 	entities := make(map[string]bool)
-	for _, issuer := range r.config.Issuers {
-		if issuer != "*" && !strings.HasSuffix(issuer, "*") {
-			entities[issuer] = true
-		}
-	}
-	for _, verifier := range r.config.Verifiers {
-		if verifier != "*" && !strings.HasSuffix(verifier, "*") {
-			entities[verifier] = true
-		}
-	}
-	for _, subject := range r.config.TrustedSubjects {
-		if subject != "*" && !strings.HasSuffix(subject, "*") {
-			entities[subject] = true
+	for _, entries := range r.resolvedLists {
+		for _, entry := range entries {
+			if entry != "*" && !strings.HasSuffix(entry, "*") {
+				entities[entry] = true
+			}
 		}
 	}
 
@@ -900,9 +976,10 @@ func (r *WhitelistRegistry) SetConfig(cfg WhitelistConfig) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.config = cfg
+	r.resolveConfig()
 }
 
-// AddIssuer adds an issuer to the whitelist.
+// AddIssuer adds an issuer to the whitelist (legacy issuers list).
 func (r *WhitelistRegistry) AddIssuer(issuer string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -914,9 +991,10 @@ func (r *WhitelistRegistry) AddIssuer(issuer string) {
 		}
 	}
 	r.config.Issuers = append(r.config.Issuers, issuer)
+	r.resolveConfig()
 }
 
-// RemoveIssuer removes an issuer from the whitelist.
+// RemoveIssuer removes an issuer from the whitelist (legacy issuers list).
 func (r *WhitelistRegistry) RemoveIssuer(issuer string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -924,12 +1002,13 @@ func (r *WhitelistRegistry) RemoveIssuer(issuer string) {
 	for i, existing := range r.config.Issuers {
 		if existing == issuer {
 			r.config.Issuers = append(r.config.Issuers[:i], r.config.Issuers[i+1:]...)
+			r.resolveConfig()
 			return
 		}
 	}
 }
 
-// AddVerifier adds a verifier to the whitelist.
+// AddVerifier adds a verifier to the whitelist (legacy verifiers list).
 func (r *WhitelistRegistry) AddVerifier(verifier string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -941,9 +1020,10 @@ func (r *WhitelistRegistry) AddVerifier(verifier string) {
 		}
 	}
 	r.config.Verifiers = append(r.config.Verifiers, verifier)
+	r.resolveConfig()
 }
 
-// RemoveVerifier removes a verifier from the whitelist.
+// RemoveVerifier removes a verifier from the whitelist (legacy verifiers list).
 func (r *WhitelistRegistry) RemoveVerifier(verifier string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -951,6 +1031,7 @@ func (r *WhitelistRegistry) RemoveVerifier(verifier string) {
 	for i, existing := range r.config.Verifiers {
 		if existing == verifier {
 			r.config.Verifiers = append(r.config.Verifiers[:i], r.config.Verifiers[i+1:]...)
+			r.resolveConfig()
 			return
 		}
 	}

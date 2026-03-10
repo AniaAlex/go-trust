@@ -1485,17 +1485,19 @@ func TestWhitelistRegistry_RefreshLoopWithOption(t *testing.T) {
 }
 
 func TestWhitelistRegistry_NoRefreshWithoutInterval(t *testing.T) {
-	// If no refresh interval, StartRefreshLoop should be a no-op for the background loop
+	// Even without an explicit refresh interval, StartRefreshLoop should start
+	// a background loop using DefaultRefreshInterval.
 	reg := NewWhitelistRegistry()
 
 	err := reg.StartRefreshLoop(context.Background())
 	if err != nil {
 		t.Fatalf("StartRefreshLoop should not fail: %v", err)
 	}
+	defer reg.Close()
 
-	// No goroutine should be started
-	if reg.refreshStopCh != nil {
-		t.Error("refresh stop channel should be nil when no interval set")
+	// A background goroutine should be started with the default interval
+	if reg.refreshStopCh == nil {
+		t.Error("refresh stop channel should not be nil — default interval should start a loop")
 	}
 }
 
@@ -1559,4 +1561,175 @@ func TestWhitelistRegistry_InitialRefreshWithoutInterval(t *testing.T) {
 	} else if meta["trust_framework"] != "whitelist" {
 		t.Errorf("expected trust_framework='whitelist', got %v", meta["trust_framework"])
 	}
+}
+
+func TestWhitelistRegistry_NamedLists(t *testing.T) {
+	// Test the new explicit Lists/Actions config format.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	jwks := map[string]interface{}{
+		"keys": []interface{}{ecdsaPubKeyToJWK(&key.PublicKey, "named-list-key")},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks)
+	}))
+	defer server.Close()
+
+	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+		Lists: map[string][]string{
+			"pid-issuers":       {server.URL},
+			"trusted-verifiers": {server.URL},
+		},
+		Actions: map[string]string{
+			"pid-provider":        "pid-issuers",
+			"credential-issuer":   "pid-issuers",
+			"verifier":            "trusted-verifiers",
+			"credential-verifier": "trusted-verifiers",
+		},
+		AllowHTTP: true,
+	}))
+
+	err := reg.StartRefreshLoop(context.Background())
+	if err != nil {
+		t.Fatalf("StartRefreshLoop failed: %v", err)
+	}
+	defer reg.Close()
+
+	makeReq := func(action string) *authzen.EvaluationRequest {
+		return &authzen.EvaluationRequest{
+			Subject: authzen.Subject{ID: server.URL},
+			Action:  &authzen.Action{Name: action},
+			Resource: authzen.Resource{
+				Type: "jwk",
+				Key:  []interface{}{ecdsaPubKeyToJWK(&key.PublicKey, "named-list-key")},
+			},
+		}
+	}
+
+	t.Run("pid-provider mapped to pid-issuers list", func(t *testing.T) {
+		resp, err := reg.Evaluate(context.Background(), makeReq("pid-provider"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected pid-provider to be trusted via pid-issuers list")
+		}
+	})
+
+	t.Run("credential-issuer mapped to pid-issuers list", func(t *testing.T) {
+		resp, err := reg.Evaluate(context.Background(), makeReq("credential-issuer"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected credential-issuer to be trusted via pid-issuers list")
+		}
+	})
+
+	t.Run("verifier mapped to trusted-verifiers list", func(t *testing.T) {
+		resp, err := reg.Evaluate(context.Background(), makeReq("verifier"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected verifier to be trusted via trusted-verifiers list")
+		}
+	})
+
+	t.Run("unmapped action denied", func(t *testing.T) {
+		resp, err := reg.Evaluate(context.Background(), makeReq("unknown-action"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Decision {
+			t.Error("expected unmapped action to be denied")
+		}
+	})
+
+	t.Run("issuer not in explicit actions denied", func(t *testing.T) {
+		// "issuer" is not in the explicit Actions map, so it should be denied
+		// even though the entity exists in a list.
+		resp, err := reg.Evaluate(context.Background(), makeReq("issuer"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Decision {
+			t.Error("expected 'issuer' action to be denied — not in explicit Actions map")
+		}
+	})
+}
+
+func TestWhitelistRegistry_NamedListsWithLegacyFallback(t *testing.T) {
+	// Test that Lists/Actions and legacy Issuers/Verifiers can coexist.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	jwks := map[string]interface{}{
+		"keys": []interface{}{ecdsaPubKeyToJWK(&key.PublicKey, "mixed-key")},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jwks)
+	}))
+	defer server.Close()
+
+	reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+		// New format: explicit list + action
+		Lists: map[string][]string{
+			"custom-list": {server.URL},
+		},
+		Actions: map[string]string{
+			"custom-role": "custom-list",
+		},
+		// Legacy format alongside
+		Issuers:   []string{server.URL},
+		AllowHTTP: true,
+	}))
+
+	err := reg.StartRefreshLoop(context.Background())
+	if err != nil {
+		t.Fatalf("StartRefreshLoop failed: %v", err)
+	}
+	defer reg.Close()
+
+	makeReq := func(action string) *authzen.EvaluationRequest {
+		return &authzen.EvaluationRequest{
+			Subject: authzen.Subject{ID: server.URL},
+			Action:  &authzen.Action{Name: action},
+			Resource: authzen.Resource{
+				Type: "jwk",
+				Key:  []interface{}{ecdsaPubKeyToJWK(&key.PublicKey, "mixed-key")},
+			},
+		}
+	}
+
+	t.Run("explicit action works", func(t *testing.T) {
+		resp, err := reg.Evaluate(context.Background(), makeReq("custom-role"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected custom-role to be trusted via custom-list")
+		}
+	})
+
+	t.Run("legacy issuer action still works", func(t *testing.T) {
+		resp, err := reg.Evaluate(context.Background(), makeReq("issuer"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected issuer to be trusted via legacy Issuers config")
+		}
+	})
+
+	t.Run("legacy pid-provider still works", func(t *testing.T) {
+		resp, err := reg.Evaluate(context.Background(), makeReq("pid-provider"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected pid-provider to be trusted via legacy Issuers config")
+		}
+	})
 }

@@ -403,6 +403,8 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 				static.WithWhitelistName(name),
 				static.WithWhitelistDescription(desc),
 				static.WithWhitelistConfig(static.WhitelistConfig{
+					Lists:           wlCfg.Lists,
+					Actions:         wlCfg.Actions,
 					Issuers:         wlCfg.Issuers,
 					Verifiers:       wlCfg.Verifiers,
 					TrustedSubjects: wlCfg.TrustedSubjects,
@@ -410,7 +412,7 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 			)
 		}
 
-		// Start background JWKS refresh if configured
+		// Start background JWKS refresh (always runs, uses DefaultRefreshInterval if not configured)
 		if err := whitelistReg.StartRefreshLoop(context.Background()); err != nil {
 			logger.Fatal("Failed to start whitelist refresh loop",
 				logging.F("error", err.Error()))
@@ -418,6 +420,8 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 
 		registryMgr.Register(whitelistReg)
 		logger.Info("Whitelist registry registered from config",
+			logging.F("lists", len(wlCfg.Lists)),
+			logging.F("actions", len(wlCfg.Actions)),
 			logging.F("issuers", len(wlCfg.Issuers)),
 			logging.F("verifiers", len(wlCfg.Verifiers)))
 	}
