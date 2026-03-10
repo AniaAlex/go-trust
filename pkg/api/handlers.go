@@ -98,7 +98,7 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 
 		start := time.Now()
 
-		// Use RegistryManager if available, fallback to legacy PipelineContext
+		// Use RegistryManager for trust evaluation
 		serverCtx.RLock()
 		registryMgr := serverCtx.RegistryManager
 		serverCtx.RUnlock()
@@ -106,13 +106,12 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 		var resp *authzen.EvaluationResponse
 		var evalErr error
 
-		if registryMgr != nil {
-			// New architecture: use RegistryManager
-			resp, evalErr = registryMgr.Evaluate(c.Request.Context(), &req)
-		} else {
-			// Legacy architecture: use direct validation (backward compatibility)
-			resp, evalErr = legacyEvaluate(serverCtx, &req)
+		if registryMgr == nil {
+			c.JSON(500, gin.H{"error": "server not configured: no registry manager"})
+			return
 		}
+
+		resp, evalErr = registryMgr.Evaluate(c.Request.Context(), &req)
 
 		validationDuration := time.Since(start)
 
@@ -157,19 +156,6 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 
 		c.JSON(200, resp)
 	}
-}
-
-// legacyEvaluate returns an error indicating legacy mode is no longer supported.
-// Use RegistryManager with TSLRegistry for trust evaluation.
-func legacyEvaluate(serverCtx *ServerContext, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
-	return &authzen.EvaluationResponse{
-		Decision: false,
-		Context: &authzen.EvaluationResponseContext{
-			Reason: map[string]interface{}{
-				"error": "legacy mode not supported; configure RegistryManager with TSLRegistry",
-			},
-		},
-	}, nil
 }
 
 // InfoHandler godoc

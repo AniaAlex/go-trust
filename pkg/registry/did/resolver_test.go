@@ -384,22 +384,22 @@ func TestDecodeMultibaseKey(t *testing.T) {
 		errorMsg     string
 	}{
 		{
-			name:        "key too short",
+			name:         "key too short",
 			multibaseKey: "z",
-			expectError: true,
-			errorMsg:    "multibase key too short",
+			expectError:  true,
+			errorMsg:     "multibase key too short",
 		},
 		{
-			name:        "empty string",
+			name:         "empty string",
 			multibaseKey: "",
-			expectError: true,
-			errorMsg:    "multibase key too short",
+			expectError:  true,
+			errorMsg:     "multibase key too short",
 		},
 		{
-			name:        "unsupported encoding",
+			name:         "unsupported encoding",
 			multibaseKey: "m0123456789", // 'm' is base64 but not supported
-			expectError: true,
-			errorMsg:    "unsupported multibase encoding",
+			expectError:  true,
+			errorMsg:     "unsupported multibase encoding",
 		},
 		{
 			name:         "valid Ed25519 key",

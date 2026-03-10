@@ -32,8 +32,11 @@ type Policy struct {
 	MDOCIACA *MDOCIACAPolicyConstraints `json:"mdociaca,omitempty" yaml:"mdociaca,omitempty"`
 }
 
-// PolicyConstraints is reserved for future registry-agnostic trust constraints.
+// PolicyConstraints contains registry-agnostic trust constraints.
 type PolicyConstraints struct {
+	// AllowedKeyTypes restricts accepted resource types (e.g., ["jwk", "x5c"]).
+	// If non-empty, requests with a resource.type not in this list are rejected.
+	AllowedKeyTypes []string `json:"allowed_key_types,omitempty" yaml:"allowed_key_types,omitempty"`
 }
 
 // OIDFedPolicyConstraints contains OpenID Federation-specific constraints.

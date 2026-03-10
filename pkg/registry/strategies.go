@@ -9,17 +9,8 @@ import (
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
-// ResolutionResult contains the evaluation result plus metadata about which registry resolved it
-type ResolutionResult struct {
-	Decision     bool
-	Registry     string // Which registry resolved this
-	Confidence   float64
-	Response     *authzen.EvaluationResponse
-	ResolutionMS int64
-}
-
 // evaluateFirstMatch queries registries in parallel and returns first positive match.
-// This is the default and fastest strategy for most use cases.
+// If no registry approves, the response includes aggregated deny reasons from all registries.
 func (m *RegistryManager) evaluateFirstMatch(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	m.mu.RLock()
 	registries := m.getApplicableRegistries(req)
@@ -41,8 +32,14 @@ func (m *RegistryManager) evaluateFirstMatch(ctx context.Context, req *authzen.E
 	timeoutCtx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 
-	// Channel for results
-	results := make(chan *ResolutionResult, len(registries))
+	type result struct {
+		registry string
+		response *authzen.EvaluationResponse
+		err      error
+		duration int64
+	}
+
+	results := make(chan result, len(registries))
 
 	// Query all registries in parallel
 	var wg sync.WaitGroup
@@ -54,6 +51,10 @@ func (m *RegistryManager) evaluateFirstMatch(ctx context.Context, req *authzen.E
 				if r := recover(); r != nil {
 					info := registry.Info()
 					m.circuitBreakers[info.Name].RecordFailure()
+					results <- result{
+						registry: info.Name,
+						err:      fmt.Errorf("registry panicked: %v", r),
+					}
 				}
 			}()
 
@@ -61,73 +62,82 @@ func (m *RegistryManager) evaluateFirstMatch(ctx context.Context, req *authzen.E
 
 			// Check circuit breaker
 			if !m.circuitBreakers[info.Name].CanAttempt() {
+				results <- result{
+					registry: info.Name,
+					err:      fmt.Errorf("circuit breaker open"),
+				}
 				return
 			}
 
 			startTime := time.Now()
 			resp, err := registry.Evaluate(timeoutCtx, req)
-			resolutionMS := time.Since(startTime).Milliseconds()
+			duration := time.Since(startTime).Milliseconds()
 
 			if err != nil {
 				m.circuitBreakers[info.Name].RecordFailure()
-				return
+			} else {
+				m.circuitBreakers[info.Name].RecordSuccess()
 			}
 
-			m.circuitBreakers[info.Name].RecordSuccess()
-
-			// Send result if decision is true
-			if resp != nil && resp.Decision {
-				results <- &ResolutionResult{
-					Decision:     true,
-					Registry:     info.Name,
-					Confidence:   1.0,
-					Response:     resp,
-					ResolutionMS: resolutionMS,
-				}
+			results <- result{
+				registry: info.Name,
+				response: resp,
+				err:      err,
+				duration: duration,
 			}
 		}(reg)
 	}
 
-	// Wait for results in separate goroutine
+	// Close channel when all goroutines finish
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
 
-	// Return first positive result
-	select {
-	case result := <-results:
-		if result != nil {
-			// Add resolution metadata to response context
-			if result.Response.Context == nil {
-				result.Response.Context = &authzen.EvaluationResponseContext{}
-			}
-			if result.Response.Context.Reason == nil {
-				result.Response.Context.Reason = make(map[string]interface{})
-			}
-			result.Response.Context.Reason["registry"] = result.Registry
-			result.Response.Context.Reason["resolution_ms"] = result.ResolutionMS
+	// Collect results, returning immediately on first positive match
+	var denyDetails []map[string]interface{}
 
-			return result.Response, nil
+	for r := range results {
+		if r.err != nil {
+			denyDetails = append(denyDetails, map[string]interface{}{
+				"registry":    r.registry,
+				"error":       r.err.Error(),
+				"duration_ms": r.duration,
+			})
+			continue
 		}
-	case <-timeoutCtx.Done():
-		return &authzen.EvaluationResponse{
-			Decision: false,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"error": "timeout waiting for registry responses",
-				},
-			},
-		}, nil
+		if r.response != nil && r.response.Decision {
+			cancel() // cancel remaining evaluations
+			if r.response.Context == nil {
+				r.response.Context = &authzen.EvaluationResponseContext{}
+			}
+			if r.response.Context.Reason == nil {
+				r.response.Context.Reason = make(map[string]interface{})
+			}
+			r.response.Context.Reason["registry"] = r.registry
+			r.response.Context.Reason["resolution_ms"] = r.duration
+			return r.response, nil
+		}
+		// Deny — capture the reason
+		detail := map[string]interface{}{
+			"registry":    r.registry,
+			"decision":    false,
+			"duration_ms": r.duration,
+		}
+		if r.response != nil && r.response.Context != nil && r.response.Context.Reason != nil {
+			detail["reason"] = r.response.Context.Reason
+		}
+		denyDetails = append(denyDetails, detail)
 	}
 
-	// No positive results
+	// No positive results — aggregate deny details
 	return &authzen.EvaluationResponse{
 		Decision: false,
 		Context: &authzen.EvaluationResponseContext{
 			Reason: map[string]interface{}{
 				"error":              "no registry returned positive match",
 				"registries_queried": len(registries),
+				"registry_results":   denyDetails,
 			},
 		},
 	}, nil
@@ -296,28 +306,34 @@ func (m *RegistryManager) evaluateSequentialFiltered(ctx context.Context, req *a
 		}, nil
 	}
 
-	attempted := []string{}
+	var registryResults []map[string]interface{}
 
 	for _, reg := range registries {
 		info := reg.Info()
 
 		if !m.circuitBreakers[info.Name].CanAttempt() {
-			attempted = append(attempted, info.Name+" (circuit open)")
+			registryResults = append(registryResults, map[string]interface{}{
+				"registry": info.Name,
+				"error":    "circuit breaker open",
+			})
 			continue
 		}
 
 		startTime := time.Now()
 		resp, err := reg.Evaluate(ctx, req)
-		resolutionMS := time.Since(startTime).Milliseconds()
+		duration := time.Since(startTime).Milliseconds()
 
 		if err != nil {
 			m.circuitBreakers[info.Name].RecordFailure()
-			attempted = append(attempted, info.Name+" (error)")
+			registryResults = append(registryResults, map[string]interface{}{
+				"registry":    info.Name,
+				"error":       err.Error(),
+				"duration_ms": duration,
+			})
 			continue
 		}
 
 		m.circuitBreakers[info.Name].RecordSuccess()
-		attempted = append(attempted, info.Name)
 
 		if resp != nil && resp.Decision {
 			if resp.Context == nil {
@@ -327,18 +343,29 @@ func (m *RegistryManager) evaluateSequentialFiltered(ctx context.Context, req *a
 				resp.Context.Reason = make(map[string]interface{})
 			}
 			resp.Context.Reason["registry"] = info.Name
-			resp.Context.Reason["resolution_ms"] = resolutionMS
-			resp.Context.Reason["registries_attempted"] = attempted
+			resp.Context.Reason["resolution_ms"] = duration
 			if policyCtx != nil && policyCtx.Policy != nil {
 				resp.Context.Reason["policy"] = policyCtx.Policy.Name
 			}
 			return resp, nil
 		}
+
+		// Deny — capture reason
+		detail := map[string]interface{}{
+			"registry":    info.Name,
+			"decision":    false,
+			"duration_ms": duration,
+		}
+		if resp != nil && resp.Context != nil && resp.Context.Reason != nil {
+			detail["reason"] = resp.Context.Reason
+		}
+		registryResults = append(registryResults, detail)
 	}
 
 	reason := map[string]interface{}{
-		"error":                "no registry returned positive match",
-		"registries_attempted": attempted,
+		"error":              "no registry returned positive match",
+		"registries_queried": len(registries),
+		"registry_results":   registryResults,
 	}
 	if policyCtx != nil && policyCtx.Policy != nil {
 		reason["policy"] = policyCtx.Policy.Name
@@ -353,13 +380,20 @@ func (m *RegistryManager) evaluateSequentialFiltered(ctx context.Context, req *a
 }
 
 // evaluateFirstMatchFiltered is the internal implementation for FirstMatch with pre-filtered registries.
+// If no registry approves, the response includes aggregated deny reasons from all registries.
 func (m *RegistryManager) evaluateFirstMatchFiltered(ctx context.Context, req *authzen.EvaluationRequest, registries []TrustRegistry, policyCtx *PolicyContext) (*authzen.EvaluationResponse, error) {
 	// Create timeout context
 	timeoutCtx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 
-	// Channel for results
-	results := make(chan *ResolutionResult, len(registries))
+	type result struct {
+		registry string
+		response *authzen.EvaluationResponse
+		err      error
+		duration int64
+	}
+
+	results := make(chan result, len(registries))
 
 	// Query all registries in parallel
 	var wg sync.WaitGroup
@@ -371,80 +405,91 @@ func (m *RegistryManager) evaluateFirstMatchFiltered(ctx context.Context, req *a
 				if r := recover(); r != nil {
 					info := registry.Info()
 					m.circuitBreakers[info.Name].RecordFailure()
+					results <- result{
+						registry: info.Name,
+						err:      fmt.Errorf("registry panicked: %v", r),
+					}
 				}
 			}()
 
 			info := registry.Info()
 
-			// Check circuit breaker
 			if !m.circuitBreakers[info.Name].CanAttempt() {
+				results <- result{
+					registry: info.Name,
+					err:      fmt.Errorf("circuit breaker open"),
+				}
 				return
 			}
 
 			startTime := time.Now()
 			resp, err := registry.Evaluate(timeoutCtx, req)
-			resolutionMS := time.Since(startTime).Milliseconds()
+			duration := time.Since(startTime).Milliseconds()
 
 			if err != nil {
 				m.circuitBreakers[info.Name].RecordFailure()
-				return
+			} else {
+				m.circuitBreakers[info.Name].RecordSuccess()
 			}
 
-			m.circuitBreakers[info.Name].RecordSuccess()
-
-			// Send result if decision is true
-			if resp != nil && resp.Decision {
-				results <- &ResolutionResult{
-					Decision:     true,
-					Registry:     info.Name,
-					Confidence:   1.0,
-					Response:     resp,
-					ResolutionMS: resolutionMS,
-				}
+			results <- result{
+				registry: info.Name,
+				response: resp,
+				err:      err,
+				duration: duration,
 			}
 		}(reg)
 	}
 
-	// Wait for results in separate goroutine
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
 
-	// Return first positive result
-	select {
-	case result := <-results:
-		if result != nil {
-			// Add resolution metadata to response context
-			if result.Response.Context == nil {
-				result.Response.Context = &authzen.EvaluationResponseContext{}
-			}
-			if result.Response.Context.Reason == nil {
-				result.Response.Context.Reason = make(map[string]interface{})
-			}
-			result.Response.Context.Reason["registry"] = result.Registry
-			result.Response.Context.Reason["resolution_ms"] = result.ResolutionMS
-			if policyCtx != nil && policyCtx.Policy != nil {
-				result.Response.Context.Reason["policy"] = policyCtx.Policy.Name
-			}
+	// Collect results, returning immediately on first positive match
+	var denyDetails []map[string]interface{}
 
-			return result.Response, nil
+	for r := range results {
+		if r.err != nil {
+			denyDetails = append(denyDetails, map[string]interface{}{
+				"registry":    r.registry,
+				"error":       r.err.Error(),
+				"duration_ms": r.duration,
+			})
+			continue
 		}
-	case <-timeoutCtx.Done():
-		return &authzen.EvaluationResponse{
-			Decision: false,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"error": "timeout waiting for registry responses",
-				},
-			},
-		}, nil
+		if r.response != nil && r.response.Decision {
+			cancel()
+			if r.response.Context == nil {
+				r.response.Context = &authzen.EvaluationResponseContext{}
+			}
+			if r.response.Context.Reason == nil {
+				r.response.Context.Reason = make(map[string]interface{})
+			}
+			r.response.Context.Reason["registry"] = r.registry
+			r.response.Context.Reason["resolution_ms"] = r.duration
+			if policyCtx != nil && policyCtx.Policy != nil {
+				r.response.Context.Reason["policy"] = policyCtx.Policy.Name
+			}
+			return r.response, nil
+		}
+		// Deny — capture the reason
+		detail := map[string]interface{}{
+			"registry":    r.registry,
+			"decision":    false,
+			"duration_ms": r.duration,
+		}
+		if r.response != nil && r.response.Context != nil && r.response.Context.Reason != nil {
+			detail["reason"] = r.response.Context.Reason
+		}
+		denyDetails = append(denyDetails, detail)
 	}
 
-	// No positive results
+	// No positive results — aggregate deny details
 	reason := map[string]interface{}{
 		"error":              "no registry returned positive match",
 		"registries_queried": len(registries),
+		"registry_results":   denyDetails,
 	}
 	if policyCtx != nil && policyCtx.Policy != nil {
 		reason["policy"] = policyCtx.Policy.Name

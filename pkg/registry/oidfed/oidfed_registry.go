@@ -605,8 +605,6 @@ func jwkKeyToMap(key interface{}) (map[string]interface{}, error) {
 	return m, nil
 }
 
-
-
 // Info returns metadata about this registry instance, including trust anchors.
 func (r *OIDFedRegistry) Info() registry.RegistryInfo {
 	return registry.RegistryInfo{

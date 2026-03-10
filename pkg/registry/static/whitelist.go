@@ -6,7 +6,6 @@ import (
 	"crypto"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -642,8 +641,8 @@ func (r *WhitelistRegistry) fetchEntityKeys(ctx context.Context, entity string) 
 		return nil, fmt.Errorf("JWKS fetch returned status %d", resp.StatusCode)
 	}
 
-	// Parse response
-	body, err := io.ReadAll(resp.Body)
+	// Parse response (limited to prevent unbounded memory use)
+	body, err := registry.ReadLimitedBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}

@@ -738,19 +738,19 @@ func TestNewServerContext_DefaultValues(t *testing.T) {
 	assert.NotNil(t, serverCtx.Logger)
 }
 
-// TestLegacyEvaluate tests the legacy evaluation path (when RegistryManager is nil)
-func TestLegacyEvaluate(t *testing.T) {
+// TestNilRegistryManager tests evaluation when RegistryManager is nil
+func TestNilRegistryManager(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	logger := logging.NewLogger(logging.InfoLevel)
 	serverCtx := NewServerContext(logger)
-	// Note: RegistryManager is nil, so legacyEvaluate will be called
+	// RegistryManager is nil
 	serverCtx.RegistryManager = nil
 
 	router := gin.New()
 	RegisterAPIRoutes(router, serverCtx)
 
-	// Test the evaluation endpoint without RegistryManager - should trigger legacy path
+	// Test the evaluation endpoint without RegistryManager - should return 500
 	body := `{
 		"subject": {
 			"type": "key",
@@ -768,16 +768,8 @@ func TestLegacyEvaluate(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	// Legacy endpoint should return 200 with decision=false and error message
-	assert.Equal(t, 200, w.Code)
-
-	var resp authzen.EvaluationResponse
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	assert.NoError(t, err)
-	assert.False(t, resp.Decision, "Legacy mode should return false decision")
-	assert.NotNil(t, resp.Context)
-	assert.NotNil(t, resp.Context.Reason)
-	assert.Contains(t, resp.Context.Reason["error"], "legacy mode not supported")
+	assert.Equal(t, 500, w.Code)
+	assert.Contains(t, w.Body.String(), "no registry manager")
 }
 
 // TestTSLsHandler_EmptyRegistryManager tests TSLsHandler when no ETSI registries exist

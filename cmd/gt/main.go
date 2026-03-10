@@ -602,8 +602,12 @@ func configurePoliciesFromConfig(cfg *config.Config, registryMgr *registry.Regis
 			Registries:  policyCfg.Registries,
 		}
 
-		// Note: policyCfg.Constraints (RequireKeyBinding, AllowedKeyTypes) are
-		// reserved for future enforcement — see design discussion.
+		// Convert constraints
+		if policyCfg.Constraints != nil && len(policyCfg.Constraints.AllowedKeyTypes) > 0 {
+			policy.Constraints = registry.PolicyConstraints{
+				AllowedKeyTypes: policyCfg.Constraints.AllowedKeyTypes,
+			}
+		}
 
 		// Convert ETSI constraints
 		if policyCfg.ETSI != nil {

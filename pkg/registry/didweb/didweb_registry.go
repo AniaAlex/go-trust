@@ -9,7 +9,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -317,8 +316,8 @@ func (r *DIDWebRegistry) resolveDID(ctx context.Context, did string) (*DIDDocume
 		return nil, fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
 	}
 
-	// Read and parse the response body
-	body, err := io.ReadAll(resp.Body)
+	// Read and parse the response body (limited to prevent unbounded memory use)
+	body, err := registry.ReadLimitedBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

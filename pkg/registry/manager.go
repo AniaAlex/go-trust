@@ -82,6 +82,30 @@ func (m *RegistryManager) Evaluate(ctx context.Context, req *authzen.EvaluationR
 	// Resolve policy from action.name
 	policyCtx := m.resolvePolicyContext(req)
 
+	// Enforce AllowedKeyTypes at the entry layer before routing to registries
+	if policyCtx.Policy != nil && len(policyCtx.Policy.Constraints.AllowedKeyTypes) > 0 && !req.IsResolutionOnlyRequest() {
+		allowed := false
+		for _, kt := range policyCtx.Policy.Constraints.AllowedKeyTypes {
+			if kt == req.Resource.Type {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return &authzen.EvaluationResponse{
+				Decision: false,
+				Context: &authzen.EvaluationResponseContext{
+					Reason: map[string]interface{}{
+						"error":             "resource type not allowed by policy",
+						"resource_type":     req.Resource.Type,
+						"allowed_key_types": policyCtx.Policy.Constraints.AllowedKeyTypes,
+						"policy":            policyCtx.Policy.Name,
+					},
+				},
+			}, nil
+		}
+	}
+
 	// Apply policy constraints to the request context
 	m.applyPolicyToRequest(req, policyCtx)
 
