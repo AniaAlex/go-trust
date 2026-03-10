@@ -737,6 +737,282 @@ func TestWhitelistRegistry_RefreshWithJWKS(t *testing.T) {
 	}
 }
 
+func TestWhitelistRegistry_MetadataDiscovery(t *testing.T) {
+	// Generate a test EC key pair
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	jwk := ecdsaPubKeyToJWK(&privateKey.PublicKey, "discovery-key-1")
+	jwks := map[string]interface{}{
+		"keys": []interface{}{jwk},
+	}
+
+	t.Run("discover_via_oauth_authorization_server", func(t *testing.T) {
+		// Server exposes JWKS at /jwks (NOT at /.well-known/jwks.json)
+		// and has OAuth AS metadata at /.well-known/oauth-authorization-server
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/oauth-authorization-server":
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"issuer":"http://%s","jwks_uri":"http://%s/jwks"}`, r.Host, r.Host)
+			case "/jwks":
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(jwks)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+		if !reg.Healthy() {
+			t.Fatal("expected registry to be healthy")
+		}
+
+		// Verify key binding works via discovered JWKS
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true for key discovered via OAuth AS metadata")
+		}
+	})
+
+	t.Run("discover_via_openid_configuration", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/openid-configuration":
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"issuer":"http://%s","jwks_uri":"http://%s/keys/jwks"}`, r.Host, r.Host)
+			case "/keys/jwks":
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(jwks)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true for key discovered via OIDC discovery")
+		}
+	})
+
+	t.Run("discover_via_openid_credential_issuer", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/openid-credential-issuer":
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"credential_issuer":"http://%s","jwks_uri":"http://%s/issuer/jwks"}`, r.Host, r.Host)
+			case "/issuer/jwks":
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(jwks)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true for key discovered via OpenID4VCI metadata")
+		}
+	})
+
+	t.Run("fallback_to_well_known_jwks_json", func(t *testing.T) {
+		// No metadata endpoints — should fall back to /.well-known/jwks.json
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/.well-known/jwks.json" {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(jwks)
+			} else {
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true via fallback to /.well-known/jwks.json")
+		}
+	})
+
+	t.Run("explicit_pattern_skips_discovery", func(t *testing.T) {
+		// Server has metadata but also a custom endpoint; explicit pattern should be used
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/oauth-authorization-server":
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"jwks_uri":"http://%s/wrong-jwks"}`, r.Host)
+			case "/custom/keys.json":
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(jwks)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:             []string{server.URL},
+			AllowHTTP:           true,
+			JWKSEndpointPattern: "{entity}/custom/keys.json",
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true via explicit JWKSEndpointPattern")
+		}
+	})
+
+	t.Run("discovery_priority_order", func(t *testing.T) {
+		// Serve different JWKS at different discovery endpoints to verify priority
+		key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		jwk2 := ecdsaPubKeyToJWK(&key2.PublicKey, "oidc-key")
+		jwks2 := map[string]interface{}{
+			"keys": []interface{}{jwk2},
+		}
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/oauth-authorization-server":
+				// First priority — points to /oauth-jwks with the CORRECT key
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"jwks_uri":"http://%s/oauth-jwks"}`, r.Host)
+			case "/oauth-jwks":
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(jwks)
+			case "/.well-known/openid-configuration":
+				// Second priority — points to different JWKS
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"jwks_uri":"http://%s/oidc-jwks"}`, r.Host)
+			case "/oidc-jwks":
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(jwks2)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+
+		// The key from oauth-authorization-server (first priority) should be trusted
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected OAuth AS metadata key to be trusted (first priority)")
+		}
+
+		// The key from openid-configuration (second priority) should NOT be trusted
+		// because the first discovery succeeded
+		resp, err = reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk2}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Decision {
+			t.Error("expected OIDC discovery key NOT to be trusted (OAuth AS took priority)")
+		}
+	})
+}
+
 func TestWhitelistRegistry_KeyFingerprint(t *testing.T) {
 	// Generate a key and verify fingerprint is deterministic
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
