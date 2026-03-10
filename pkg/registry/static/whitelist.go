@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,9 +78,10 @@ type WhitelistConfig struct {
 	// Use {entity} as placeholder for the entity URL.
 	//
 	// When empty (default), the registry tries standard metadata discovery first:
-	//   1. {entity}/.well-known/oauth-authorization-server  (RFC 8414)
-	//   2. {entity}/.well-known/openid-configuration        (OIDC Discovery)
-	//   3. {entity}/.well-known/openid-credential-issuer    (OpenID4VCI)
+	//   1. {entity}/.well-known/jwt-vc-issuer              (SD-JWT VC §5.3, RFC 8615)
+	//   2. {entity}/.well-known/oauth-authorization-server  (RFC 8414)
+	//   3. {entity}/.well-known/openid-configuration        (OIDC Discovery)
+	//   4. {entity}/.well-known/openid-credential-issuer    (OpenID4VCI)
 	// and falls back to {entity}/.well-known/jwks.json if no jwks_uri is found.
 	JWKSEndpointPattern string `json:"jwks_endpoint_pattern,omitempty" yaml:"jwks_endpoint_pattern,omitempty"`
 
@@ -621,41 +623,54 @@ func (r *WhitelistRegistry) countTotalKeys() int {
 
 // fetchEntityKeys fetches JWKS from an entity's endpoint.
 // When JWKSEndpointPattern is explicitly configured, it is used directly.
-// Otherwise, standard metadata discovery is attempted first (RFC 8414, OIDC, OpenID4VCI),
-// falling back to {entity}/.well-known/jwks.json if discovery yields no jwks_uri.
+// Otherwise, standard metadata discovery is attempted first:
+//  1. SD-JWT VC §5.3 JWT VC Issuer Metadata (.well-known/jwt-vc-issuer) — supports inline JWKS
+//  2. RFC 8414 OAuth AS Metadata (.well-known/oauth-authorization-server)
+//  3. OIDC Discovery (.well-known/openid-configuration)
+//  4. OpenID4VCI Metadata (.well-known/openid-credential-issuer)
+//
+// Falls back to {entity}/.well-known/jwks.json if discovery yields nothing.
 func (r *WhitelistRegistry) fetchEntityKeys(ctx context.Context, entity string) ([]crypto.PublicKey, error) {
-	var jwksURL string
-
 	if r.config.JWKSEndpointPattern != "" {
 		// Explicit pattern configured — use it directly (backward compat)
-		jwksURL = r.buildJWKSURL(entity)
-	} else {
-		// Try standard metadata discovery
-		discovered := r.discoverJWKSURI(ctx, entity)
-		if discovered != "" {
-			jwksURL = discovered
-		} else {
-			// Fall back to default well-known endpoint
-			jwksURL = r.buildJWKSURL(entity)
-			r.logger.Debug("metadata discovery failed, falling back to default",
-				"entity", entity,
-				"fallback_url", jwksURL)
-		}
+		return r.fetchJWKSFromURL(ctx, r.buildJWKSURL(entity))
 	}
 
+	// 1. Try SD-JWT VC §5.3 (.well-known/jwt-vc-issuer) — may return inline JWKS
+	keys, err := r.tryJWTVCIssuerMetadata(ctx, entity)
+	if err == nil {
+		r.logger.Info("discovered keys via jwt-vc-issuer metadata",
+			"entity", entity, "key_count", len(keys))
+		return keys, nil
+	}
+	r.logger.Debug("jwt-vc-issuer discovery failed", "entity", entity, "error", err)
+
+	// 2-4. Try metadata endpoints that expose jwks_uri
+	discovered := r.discoverJWKSURI(ctx, entity)
+	if discovered != "" {
+		return r.fetchJWKSFromURL(ctx, discovered)
+	}
+
+	// 5. Fallback to default well-known endpoint
+	fallbackURL := r.buildJWKSURL(entity)
+	r.logger.Debug("metadata discovery failed, falling back to default",
+		"entity", entity, "fallback_url", fallbackURL)
+	return r.fetchJWKSFromURL(ctx, fallbackURL)
+}
+
+// fetchJWKSFromURL fetches and parses a JWKS from the given URL.
+func (r *WhitelistRegistry) fetchJWKSFromURL(ctx context.Context, jwksURL string) ([]crypto.PublicKey, error) {
 	// Validate URL scheme
 	if !r.config.AllowHTTP && !strings.HasPrefix(jwksURL, "https://") {
 		return nil, fmt.Errorf("HTTPS required for JWKS fetch (got %s)", jwksURL)
 	}
 
-	// Create request
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
-	// Fetch JWKS
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching JWKS: %w", err)
@@ -666,7 +681,6 @@ func (r *WhitelistRegistry) fetchEntityKeys(ctx context.Context, entity string) 
 		return nil, fmt.Errorf("JWKS fetch returned status %d from %s", resp.StatusCode, jwksURL)
 	}
 
-	// Parse response (limited to prevent unbounded memory use)
 	body, err := registry.ReadLimitedBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
@@ -678,6 +692,59 @@ func (r *WhitelistRegistry) fetchEntityKeys(ctx context.Context, entity string) 
 	}
 
 	return ExtractPublicKeysFromJWKS(jwks)
+}
+
+// tryJWTVCIssuerMetadata attempts SD-JWT VC §5.3 JWT VC Issuer Metadata discovery.
+// The well-known URL is constructed per RFC 8615: the well-known string is inserted
+// between the host component and the path component of the entity URL.
+// The metadata may contain inline "jwks" or a "jwks_uri" reference.
+func (r *WhitelistRegistry) tryJWTVCIssuerMetadata(ctx context.Context, entity string) ([]crypto.PublicKey, error) {
+	metadataURL := buildWellKnownURL(entity, "jwt-vc-issuer")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching jwt-vc-issuer metadata: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("jwt-vc-issuer metadata returned status %d", resp.StatusCode)
+	}
+
+	body, err := registry.ReadLimitedBody(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading jwt-vc-issuer metadata: %w", err)
+	}
+
+	var metadata struct {
+		Issuer  string                 `json:"issuer"`
+		JWKSURI string                 `json:"jwks_uri,omitempty"`
+		JWKS    map[string]interface{} `json:"jwks,omitempty"`
+	}
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		return nil, fmt.Errorf("parsing jwt-vc-issuer metadata: %w", err)
+	}
+
+	// Prefer inline JWKS if present
+	if metadata.JWKS != nil {
+		return ExtractPublicKeysFromJWKS(metadata.JWKS)
+	}
+
+	// Fall back to jwks_uri
+	if metadata.JWKSURI != "" {
+		if !r.config.AllowHTTP && !strings.HasPrefix(metadata.JWKSURI, "https://") {
+			return nil, fmt.Errorf("jwks_uri must use HTTPS: %s", metadata.JWKSURI)
+		}
+		return r.fetchJWKSFromURL(ctx, metadata.JWKSURI)
+	}
+
+	return nil, fmt.Errorf("jwt-vc-issuer metadata has neither jwks nor jwks_uri")
 }
 
 // discoverJWKSURI attempts to discover the JWKS URI for an entity using standard
@@ -756,6 +823,30 @@ func (r *WhitelistRegistry) fetchMetadataJWKSURI(ctx context.Context, metadataUR
 	}
 
 	return metadata.JWKSURI, nil
+}
+
+// buildWellKnownURL constructs a well-known URL per RFC 8615 §3.
+// The well-known suffix is inserted between the host and path components of the entity URL.
+// For example, with suffix "jwt-vc-issuer":
+//
+//	https://example.com           → https://example.com/.well-known/jwt-vc-issuer
+//	https://example.com/tenant/1  → https://example.com/.well-known/jwt-vc-issuer/tenant/1
+func buildWellKnownURL(entity, suffix string) string {
+	entity = strings.TrimSuffix(entity, "/")
+
+	parsed, err := url.Parse(entity)
+	if err != nil || parsed.Host == "" {
+		// Best-effort fallback: just append
+		return entity + "/.well-known/" + suffix
+	}
+
+	path := strings.TrimPrefix(parsed.Path, "/")
+	base := parsed.Scheme + "://" + parsed.Host
+
+	if path == "" {
+		return base + "/.well-known/" + suffix
+	}
+	return base + "/.well-known/" + suffix + "/" + path
 }
 
 // buildJWKSURL constructs the JWKS URL for an entity.

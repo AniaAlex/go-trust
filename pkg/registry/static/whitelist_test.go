@@ -749,6 +749,143 @@ func TestWhitelistRegistry_MetadataDiscovery(t *testing.T) {
 		"keys": []interface{}{jwk},
 	}
 
+	t.Run("discover_via_jwt_vc_issuer_inline_jwks", func(t *testing.T) {
+		// Server exposes jwt-vc-issuer metadata with inline JWKS (no jwks_uri)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/jwt-vc-issuer":
+				w.Header().Set("Content-Type", "application/json")
+				jwksJSON, _ := json.Marshal(jwks)
+				fmt.Fprintf(w, `{"issuer":"http://%s","jwks":%s}`, r.Host, jwksJSON)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true for key from jwt-vc-issuer inline JWKS")
+		}
+	})
+
+	t.Run("discover_via_jwt_vc_issuer_jwks_uri", func(t *testing.T) {
+		// Server exposes jwt-vc-issuer metadata with jwks_uri (no inline JWKS)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/jwt-vc-issuer":
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"issuer":"http://%s","jwks_uri":"http://%s/issuer-keys"}`, r.Host, r.Host)
+			case "/issuer-keys":
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(jwks)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected decision=true for key from jwt-vc-issuer jwks_uri")
+		}
+	})
+
+	t.Run("jwt_vc_issuer_takes_priority_over_oauth_as", func(t *testing.T) {
+		// jwt-vc-issuer should win over oauth-authorization-server
+		otherKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		otherJWK := ecdsaPubKeyToJWK(&otherKey.PublicKey, "other-key")
+		otherJWKS := map[string]interface{}{"keys": []interface{}{otherJWK}}
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/jwt-vc-issuer":
+				w.Header().Set("Content-Type", "application/json")
+				jwksJSON, _ := json.Marshal(jwks)
+				fmt.Fprintf(w, `{"issuer":"http://%s","jwks":%s}`, r.Host, jwksJSON)
+			case "/.well-known/oauth-authorization-server":
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"issuer":"http://%s","jwks_uri":"http://%s/oauth-jwks"}`, r.Host, r.Host)
+			case "/oauth-jwks":
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(otherJWKS)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		reg := NewWhitelistRegistry(WithWhitelistConfig(WhitelistConfig{
+			Issuers:   []string{server.URL},
+			AllowHTTP: true,
+		}))
+
+		err := reg.Refresh(context.Background())
+		if err != nil {
+			t.Fatalf("Refresh failed: %v", err)
+		}
+
+		// The key from jwt-vc-issuer should be trusted
+		resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{jwk}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.Decision {
+			t.Error("expected jwt-vc-issuer key to be trusted (first priority)")
+		}
+
+		// The key from oauth-authorization-server should NOT be trusted
+		resp, err = reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+			Subject:  authzen.Subject{ID: server.URL},
+			Action:   &authzen.Action{Name: "issuer"},
+			Resource: authzen.Resource{Type: "jwk", Key: []interface{}{otherJWK}},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Decision {
+			t.Error("expected OAuth AS key NOT to be trusted (jwt-vc-issuer took priority)")
+		}
+	})
+
 	t.Run("discover_via_oauth_authorization_server", func(t *testing.T) {
 		// Server exposes JWKS at /jwks (NOT at /.well-known/jwks.json)
 		// and has OAuth AS metadata at /.well-known/oauth-authorization-server
@@ -1011,6 +1148,38 @@ func TestWhitelistRegistry_MetadataDiscovery(t *testing.T) {
 			t.Error("expected OIDC discovery key NOT to be trusted (OAuth AS took priority)")
 		}
 	})
+}
+
+func TestBuildWellKnownURL(t *testing.T) {
+	tests := []struct {
+		entity string
+		suffix string
+		want   string
+	}{
+		// Host-only entity
+		{"https://example.com", "jwt-vc-issuer", "https://example.com/.well-known/jwt-vc-issuer"},
+		// Host with trailing slash
+		{"https://example.com/", "jwt-vc-issuer", "https://example.com/.well-known/jwt-vc-issuer"},
+		// Path-based entity (RFC 8615 §3: insert between host and path)
+		{"https://example.com/tenant1", "jwt-vc-issuer", "https://example.com/.well-known/jwt-vc-issuer/tenant1"},
+		// Deep path
+		{"https://example.com/org/tenant/v1", "jwt-vc-issuer", "https://example.com/.well-known/jwt-vc-issuer/org/tenant/v1"},
+		// With port
+		{"https://example.com:8443/tenant", "jwt-vc-issuer", "https://example.com:8443/.well-known/jwt-vc-issuer/tenant"},
+		// HTTP (test servers)
+		{"http://127.0.0.1:12345", "jwt-vc-issuer", "http://127.0.0.1:12345/.well-known/jwt-vc-issuer"},
+		// Works with other well-known suffixes too
+		{"https://example.com/path", "openid-configuration", "https://example.com/.well-known/openid-configuration/path"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.entity, func(t *testing.T) {
+			got := buildWellKnownURL(tt.entity, tt.suffix)
+			if got != tt.want {
+				t.Errorf("buildWellKnownURL(%q, %q) = %q, want %q", tt.entity, tt.suffix, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestWhitelistRegistry_KeyFingerprint(t *testing.T) {
