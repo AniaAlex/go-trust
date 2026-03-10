@@ -61,10 +61,11 @@ type WhitelistRegistry struct {
 	stopCh     chan struct{}
 	logger     *slog.Logger
 
-	// Track refresh state for health reporting
-	keysLoaded       bool
-	refreshCompleted bool
-	lastRefresh      time.Time
+	// Track refresh state for health reporting.
+	// keysLoaded is true only when the most recent refresh loaded keys
+	// for ALL configured entities without errors.
+	keysLoaded  bool
+	lastRefresh time.Time
 
 	// Background refresh
 	refreshInterval time.Duration
@@ -633,16 +634,17 @@ func (r *WhitelistRegistry) Info() registry.RegistryInfo {
 		Version:        "2.0.0",
 		ResourceTypes:  []string{"jwk", "x5c"},
 		ResolutionOnly: true,
-		Healthy:        r.refreshCompleted && r.keysLoaded,
+		Healthy:        r.keysLoaded,
 	}
 }
 
-// Healthy returns true if the first JWKS refresh has completed successfully
-// and keys have been loaded for whitelisted entities.
+// Healthy returns true when the most recent JWKS refresh loaded keys for
+// all configured entities without errors. Starts false, becomes true after
+// first successful refresh, drops back to false if any refresh fails.
 func (r *WhitelistRegistry) Healthy() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.refreshCompleted && r.keysLoaded
+	return r.keysLoaded
 }
 
 // Refresh fetches JWKS for all whitelisted entities and caches their key fingerprints.
@@ -695,14 +697,14 @@ func (r *WhitelistRegistry) Refresh(ctx context.Context) error {
 		}
 	}
 
-	r.keysLoaded = len(r.keyHashes) > 0 || len(entities) == 0
 	r.lastRefresh = time.Now()
 
 	if len(errors) > 0 {
+		r.keysLoaded = false
 		return fmt.Errorf("failed to fetch keys for %d entities", len(errors))
 	}
 
-	r.refreshCompleted = true
+	r.keysLoaded = true
 	r.logger.Info("whitelist keys refreshed",
 		"entities", len(r.keyHashes),
 		"total_keys", r.countTotalKeys())
