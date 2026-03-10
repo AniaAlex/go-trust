@@ -60,6 +60,8 @@ const (
 	DefaultTimeout = 30 * time.Second
 
 	// maxResponseBodyBytes is the maximum allowed HTTP response body size (10 MB).
+	// This is the default for the authzenclient package; server-side code uses
+	// registry.GetMaxResponseBodyBytes() which is configurable.
 	maxResponseBodyBytes = 10 * 1024 * 1024
 
 	// WellKnownPath is the discovery endpoint path.

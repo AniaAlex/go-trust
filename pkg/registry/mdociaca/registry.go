@@ -35,7 +35,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -386,7 +385,7 @@ func (r *Registry) fetchMetadata(ctx context.Context, url string) (*IssuerMetada
 	}
 
 	var metadata IssuerMetadata
-	if err := json.NewDecoder(io.LimitReader(resp.Body, registry.MaxResponseBodyBytes)).Decode(&metadata); err != nil {
+	if err := json.NewDecoder(registry.LimitedReader(resp.Body)).Decode(&metadata); err != nil {
 		return nil, fmt.Errorf("decode metadata: %w", err)
 	}
 
@@ -411,7 +410,7 @@ func (r *Registry) fetchIACACerts(ctx context.Context, url string) ([]*x509.Cert
 	}
 
 	var iacasResp IACAsResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, registry.MaxResponseBodyBytes)).Decode(&iacasResp); err != nil {
+	if err := json.NewDecoder(registry.LimitedReader(resp.Body)).Decode(&iacasResp); err != nil {
 		return nil, fmt.Errorf("decode IACAs: %w", err)
 	}
 

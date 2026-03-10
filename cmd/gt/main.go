@@ -191,6 +191,11 @@ func main() {
 	// Create server context
 	serverCtx := api.NewServerContext(logger)
 
+	// Apply global HTTP response body size limit from config
+	if cfg != nil && cfg.Security.MaxResponseBodyBytes > 0 {
+		registry.SetMaxResponseBodyBytes(cfg.Security.MaxResponseBodyBytes)
+	}
+
 	// Initialize RegistryManager
 	registryMgr := registry.NewRegistryManager(registry.FirstMatch, 30*time.Second)
 

@@ -252,9 +252,10 @@ type LoggingConfig struct {
 
 // SecurityConfig contains security-related configuration settings.
 type SecurityConfig struct {
-	RateLimitRPS   int      `yaml:"rate_limit_rps"`
-	EnableCORS     bool     `yaml:"enable_cors"`
-	AllowedOrigins []string `yaml:"allowed_origins"`
+	RateLimitRPS         int      `yaml:"rate_limit_rps"`
+	EnableCORS           bool     `yaml:"enable_cors"`
+	AllowedOrigins       []string `yaml:"allowed_origins"`
+	MaxResponseBodyBytes int      `yaml:"max_response_body_bytes,omitempty"` // Max HTTP response body size in bytes (default: 10MB)
 }
 
 // DefaultConfig returns a Config with sensible default values.
@@ -276,9 +277,10 @@ func DefaultConfig() *Config {
 			Output: "stdout",
 		},
 		Security: SecurityConfig{
-			RateLimitRPS:   100,
-			EnableCORS:     false,
-			AllowedOrigins: []string{},
+			RateLimitRPS:         100,
+			EnableCORS:           false,
+			AllowedOrigins:       []string{},
+			MaxResponseBodyBytes: 10 * 1024 * 1024, // 10 MB
 		},
 	}
 }
@@ -371,6 +373,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GT_ALLOWED_ORIGINS"); v != "" {
 		cfg.Security.AllowedOrigins = strings.Split(v, ",")
+	}
+	if v := os.Getenv("GT_MAX_RESPONSE_BODY_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Security.MaxResponseBodyBytes = n
+		}
 	}
 }
 
