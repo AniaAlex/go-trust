@@ -31,7 +31,7 @@ func StatusHandler(serverCtx *ServerContext) gin.HandlerFunc {
 		tslCount := getRegistryCount(serverCtx)
 
 		// Log the status request with structured logging
-		serverCtx.Logger.Warn("API status request (deprecated endpoint)",
+		serverCtx.Logger.Debug("API status request (deprecated endpoint)",
 			logging.F("remote_ip", c.ClientIP()),
 			logging.F("registry_count", tslCount),
 			logging.F("replacement", "GET /readyz"))
@@ -140,7 +140,7 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 		}
 
 		if resp.Decision {
-			serverCtx.Logger.Info("AuthZEN request approved",
+			serverCtx.Logger.Debug("AuthZEN request approved",
 				logging.F("remote_ip", c.ClientIP()),
 				logging.F("subject_id", req.Subject.ID),
 				logging.F("resource_type", req.Resource.Type),
@@ -151,7 +151,7 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 				serverCtx.Metrics.RecordCertValidation(validationDuration, true)
 			}
 		} else {
-			serverCtx.Logger.Info("AuthZEN request denied",
+			serverCtx.Logger.Debug("AuthZEN request denied",
 				logging.F("remote_ip", c.ClientIP()),
 				logging.F("subject_id", req.Subject.ID),
 				logging.F("resource_type", req.Resource.Type),
@@ -223,7 +223,7 @@ func InfoHandler(serverCtx *ServerContext) gin.HandlerFunc {
 		}
 
 		// Log info request with structured logging
-		serverCtx.Logger.Warn("API info request (deprecated endpoint)",
+		serverCtx.Logger.Debug("API info request (deprecated endpoint)",
 			logging.F("remote_ip", c.ClientIP()),
 			logging.F("registry_count", registryCount),
 			logging.F("replacement", "GET /tsls"))
@@ -270,7 +270,7 @@ func TSLsHandler(serverCtx *ServerContext) gin.HandlerFunc {
 			registryCount = len(registryInfos)
 		}
 
-		serverCtx.Logger.Info("API /tsls request",
+		serverCtx.Logger.Debug("API /tsls request",
 			logging.F("remote_ip", c.ClientIP()),
 			logging.F("registry_count", registryCount))
 
