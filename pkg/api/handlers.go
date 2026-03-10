@@ -90,11 +90,20 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 			return
 		}
 
-		// Log valid request
+		// Log valid request with full trace details
+		actionName := ""
+		if req.Action != nil {
+			actionName = req.Action.Name
+		}
 		serverCtx.Logger.Debug("Processing AuthZEN request",
 			logging.F("remote_ip", c.ClientIP()),
 			logging.F("subject_id", req.Subject.ID),
-			logging.F("resource_type", req.Resource.Type))
+			logging.F("subject_type", req.Subject.Type),
+			logging.F("resource_type", req.Resource.Type),
+			logging.F("resource_id", req.Resource.ID),
+			logging.F("action", actionName),
+			logging.F("has_key", len(req.Resource.Key) > 0),
+			logging.F("has_context", req.Context != nil))
 
 		start := time.Now()
 
@@ -151,6 +160,16 @@ func AuthZENDecisionHandler(serverCtx *ServerContext) gin.HandlerFunc {
 			// Record failed validation metrics
 			if serverCtx.Metrics != nil {
 				serverCtx.Metrics.RecordCertValidation(validationDuration, false)
+			}
+		}
+
+		// Debug trace: response details
+		if resp.Context != nil && resp.Context.Reason != nil {
+			if registry, ok := resp.Context.Reason["registry"]; ok {
+				serverCtx.Logger.Debug("AuthZEN response details",
+					logging.F("decision", resp.Decision),
+					logging.F("registry", registry),
+					logging.F("duration_ms", validationDuration.Milliseconds()))
 			}
 		}
 

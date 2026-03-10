@@ -199,6 +199,7 @@ func main() {
 
 	// Initialize RegistryManager
 	registryMgr := registry.NewRegistryManager(registry.FirstMatch, 30*time.Second)
+	registryMgr.SetLogger(logger)
 
 	// Configure registries from config file
 	if cfg != nil {

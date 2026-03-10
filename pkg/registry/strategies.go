@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirosfoundation/g119612/pkg/logging"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 )
 
@@ -62,6 +63,8 @@ func (m *RegistryManager) evaluateFirstMatch(ctx context.Context, req *authzen.E
 
 			// Check circuit breaker
 			if !m.circuitBreakers[info.Name].CanAttempt() {
+				m.getLogger().Debug("Strategy[FirstMatch]: circuit breaker open, skipping",
+					logging.F("registry", info.Name))
 				results <- result{
 					registry: info.Name,
 					err:      fmt.Errorf("circuit breaker open"),
@@ -69,14 +72,29 @@ func (m *RegistryManager) evaluateFirstMatch(ctx context.Context, req *authzen.E
 				return
 			}
 
+			m.getLogger().Debug("Strategy[FirstMatch]: evaluating registry",
+				logging.F("registry", info.Name))
+
 			startTime := time.Now()
 			resp, err := registry.Evaluate(timeoutCtx, req)
 			duration := time.Since(startTime).Milliseconds()
 
 			if err != nil {
 				m.circuitBreakers[info.Name].RecordFailure()
+				m.getLogger().Debug("Strategy[FirstMatch]: registry returned error",
+					logging.F("registry", info.Name),
+					logging.F("error", err.Error()),
+					logging.F("duration_ms", duration))
 			} else {
 				m.circuitBreakers[info.Name].RecordSuccess()
+				decision := false
+				if resp != nil {
+					decision = resp.Decision
+				}
+				m.getLogger().Debug("Strategy[FirstMatch]: registry responded",
+					logging.F("registry", info.Name),
+					logging.F("decision", decision),
+					logging.F("duration_ms", duration))
 			}
 
 			results <- result{
@@ -195,16 +213,33 @@ func (m *RegistryManager) evaluateAll(ctx context.Context, req *authzen.Evaluati
 			startTime := time.Now()
 
 			if !m.circuitBreakers[info.Name].CanAttempt() {
+				m.getLogger().Debug("Strategy[All]: circuit breaker open, skipping",
+					logging.F("registry", info.Name))
 				return
 			}
+
+			m.getLogger().Debug("Strategy[All]: evaluating registry",
+				logging.F("registry", info.Name))
 
 			resp, err := registry.Evaluate(timeoutCtx, req)
 			duration := time.Since(startTime).Milliseconds()
 
 			if err != nil {
 				m.circuitBreakers[info.Name].RecordFailure()
+				m.getLogger().Debug("Strategy[All]: registry returned error",
+					logging.F("registry", info.Name),
+					logging.F("error", err.Error()),
+					logging.F("duration_ms", duration))
 			} else {
 				m.circuitBreakers[info.Name].RecordSuccess()
+				decision := false
+				if resp != nil {
+					decision = resp.Decision
+				}
+				m.getLogger().Debug("Strategy[All]: registry responded",
+					logging.F("registry", info.Name),
+					logging.F("decision", decision),
+					logging.F("duration_ms", duration))
 			}
 
 			results <- result{
@@ -312,6 +347,8 @@ func (m *RegistryManager) evaluateSequentialFiltered(ctx context.Context, req *a
 		info := reg.Info()
 
 		if !m.circuitBreakers[info.Name].CanAttempt() {
+			m.getLogger().Debug("Strategy[Sequential]: circuit breaker open, skipping",
+				logging.F("registry", info.Name))
 			registryResults = append(registryResults, map[string]interface{}{
 				"registry": info.Name,
 				"error":    "circuit breaker open",
@@ -319,12 +356,19 @@ func (m *RegistryManager) evaluateSequentialFiltered(ctx context.Context, req *a
 			continue
 		}
 
+		m.getLogger().Debug("Strategy[Sequential]: evaluating registry",
+			logging.F("registry", info.Name))
+
 		startTime := time.Now()
 		resp, err := reg.Evaluate(ctx, req)
 		duration := time.Since(startTime).Milliseconds()
 
 		if err != nil {
 			m.circuitBreakers[info.Name].RecordFailure()
+			m.getLogger().Debug("Strategy[Sequential]: registry returned error",
+				logging.F("registry", info.Name),
+				logging.F("error", err.Error()),
+				logging.F("duration_ms", duration))
 			registryResults = append(registryResults, map[string]interface{}{
 				"registry":    info.Name,
 				"error":       err.Error(),
@@ -336,6 +380,9 @@ func (m *RegistryManager) evaluateSequentialFiltered(ctx context.Context, req *a
 		m.circuitBreakers[info.Name].RecordSuccess()
 
 		if resp != nil && resp.Decision {
+			m.getLogger().Debug("Strategy[Sequential]: positive match found",
+				logging.F("registry", info.Name),
+				logging.F("duration_ms", duration))
 			if resp.Context == nil {
 				resp.Context = &authzen.EvaluationResponseContext{}
 			}
@@ -351,6 +398,9 @@ func (m *RegistryManager) evaluateSequentialFiltered(ctx context.Context, req *a
 		}
 
 		// Deny — capture reason
+		m.getLogger().Debug("Strategy[Sequential]: registry denied",
+			logging.F("registry", info.Name),
+			logging.F("duration_ms", duration))
 		detail := map[string]interface{}{
 			"registry":    info.Name,
 			"decision":    false,
@@ -415,6 +465,8 @@ func (m *RegistryManager) evaluateFirstMatchFiltered(ctx context.Context, req *a
 			info := registry.Info()
 
 			if !m.circuitBreakers[info.Name].CanAttempt() {
+				m.getLogger().Debug("Strategy[FirstMatch]: circuit breaker open, skipping",
+					logging.F("registry", info.Name))
 				results <- result{
 					registry: info.Name,
 					err:      fmt.Errorf("circuit breaker open"),
@@ -422,14 +474,29 @@ func (m *RegistryManager) evaluateFirstMatchFiltered(ctx context.Context, req *a
 				return
 			}
 
+			m.getLogger().Debug("Strategy[FirstMatch]: evaluating registry",
+				logging.F("registry", info.Name))
+
 			startTime := time.Now()
 			resp, err := registry.Evaluate(timeoutCtx, req)
 			duration := time.Since(startTime).Milliseconds()
 
 			if err != nil {
 				m.circuitBreakers[info.Name].RecordFailure()
+				m.getLogger().Debug("Strategy[FirstMatch]: registry returned error",
+					logging.F("registry", info.Name),
+					logging.F("error", err.Error()),
+					logging.F("duration_ms", duration))
 			} else {
 				m.circuitBreakers[info.Name].RecordSuccess()
+				decision := false
+				if resp != nil {
+					decision = resp.Decision
+				}
+				m.getLogger().Debug("Strategy[FirstMatch]: registry responded",
+					logging.F("registry", info.Name),
+					logging.F("decision", decision),
+					logging.F("duration_ms", duration))
 			}
 
 			results <- result{
@@ -460,6 +527,9 @@ func (m *RegistryManager) evaluateFirstMatchFiltered(ctx context.Context, req *a
 		}
 		if r.response != nil && r.response.Decision {
 			cancel()
+			m.getLogger().Debug("Strategy[FirstMatch]: positive match found",
+				logging.F("registry", r.registry),
+				logging.F("duration_ms", r.duration))
 			if r.response.Context == nil {
 				r.response.Context = &authzen.EvaluationResponseContext{}
 			}
@@ -486,6 +556,10 @@ func (m *RegistryManager) evaluateFirstMatchFiltered(ctx context.Context, req *a
 	}
 
 	// No positive results — aggregate deny details
+	m.getLogger().Debug("Strategy[FirstMatch]: no positive match from any registry",
+		logging.F("registries_queried", len(registries)),
+		logging.F("deny_count", len(denyDetails)))
+
 	reason := map[string]interface{}{
 		"error":              "no registry returned positive match",
 		"registries_queried": len(registries),
@@ -537,16 +611,33 @@ func (m *RegistryManager) evaluateAllFiltered(ctx context.Context, req *authzen.
 			startTime := time.Now()
 
 			if !m.circuitBreakers[info.Name].CanAttempt() {
+				m.getLogger().Debug("Strategy[AllFiltered]: circuit breaker open, skipping",
+					logging.F("registry", info.Name))
 				return
 			}
+
+			m.getLogger().Debug("Strategy[AllFiltered]: evaluating registry",
+				logging.F("registry", info.Name))
 
 			resp, err := registry.Evaluate(timeoutCtx, req)
 			duration := time.Since(startTime).Milliseconds()
 
 			if err != nil {
 				m.circuitBreakers[info.Name].RecordFailure()
+				m.getLogger().Debug("Strategy[AllFiltered]: registry returned error",
+					logging.F("registry", info.Name),
+					logging.F("error", err.Error()),
+					logging.F("duration_ms", duration))
 			} else {
 				m.circuitBreakers[info.Name].RecordSuccess()
+				decision := false
+				if resp != nil {
+					decision = resp.Decision
+				}
+				m.getLogger().Debug("Strategy[AllFiltered]: registry responded",
+					logging.F("registry", info.Name),
+					logging.F("decision", decision),
+					logging.F("duration_ms", duration))
 			}
 
 			results <- result{
