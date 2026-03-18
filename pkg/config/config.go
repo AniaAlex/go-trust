@@ -33,6 +33,8 @@ type RegistriesConfig struct {
 	DIDWeb   *DIDWebRegistryConfig   `yaml:"didweb,omitempty"`
 	DIDWebVH *DIDWebVHRegistryConfig `yaml:"didwebvh,omitempty"`
 	DIDJWKS  *DIDJWKSRegistryConfig  `yaml:"didjwks,omitempty"`
+	// ETSI TS 119 602 LoTE registry
+	LoTE *LoTERegistryConfig `yaml:"lote,omitempty"`
 	// mDOC IACA registry
 	MDOCIACA *MDOCIACARegistryConfig `yaml:"mdociaca,omitempty"`
 	// Static test registries
@@ -144,6 +146,17 @@ type MDOCIACARegistryConfig struct {
 	IssuerAllowlist []string `yaml:"issuer_allowlist,omitempty"`
 	CacheTTL        string   `yaml:"cache_ttl,omitempty"`
 	HTTPTimeout     string   `yaml:"http_timeout,omitempty"`
+}
+
+// LoTERegistryConfig contains ETSI TS 119 602 LoTE registry configuration.
+type LoTERegistryConfig struct {
+	Enabled         bool     `yaml:"enabled"`
+	Name            string   `yaml:"name,omitempty"`
+	Description     string   `yaml:"description,omitempty"`
+	Sources         []string `yaml:"sources"`
+	VerifyJWS       bool     `yaml:"verify_jws,omitempty"`
+	FetchTimeout    string   `yaml:"fetch_timeout,omitempty"`
+	RefreshInterval string   `yaml:"refresh_interval,omitempty"`
 }
 
 // =============================================================================

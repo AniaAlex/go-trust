@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/sirosfoundation/go-trust/pkg/registry/didweb"
 	"github.com/sirosfoundation/go-trust/pkg/registry/didwebvh"
 	"github.com/sirosfoundation/go-trust/pkg/registry/etsi"
+	"github.com/sirosfoundation/go-trust/pkg/registry/lote"
 	"github.com/sirosfoundation/go-trust/pkg/registry/mdociaca"
 	"github.com/sirosfoundation/go-trust/pkg/registry/oidfed"
 	"github.com/sirosfoundation/go-trust/pkg/registry/static"
@@ -587,6 +589,55 @@ func configureRegistriesFromConfig(cfg *config.Config, registryMgr *registry.Reg
 
 		registryMgr.Register(didjwksReg)
 		logger.Info("did:jwks registry registered from config")
+	}
+
+	// Configure LoTE registry from config
+	if cfg.Registries.LoTE != nil && cfg.Registries.LoTE.Enabled {
+		logger.Info("Configuring LoTE registry from config file")
+		loteCfg := cfg.Registries.LoTE
+
+		loteConfig := lote.Config{
+			Name:        loteCfg.Name,
+			Description: loteCfg.Description,
+			Sources:     loteCfg.Sources,
+			VerifyJWS:   loteCfg.VerifyJWS,
+			Logger:      slog.Default(),
+		}
+
+		if loteCfg.FetchTimeout != "" {
+			if timeout, err := time.ParseDuration(loteCfg.FetchTimeout); err == nil {
+				loteConfig.FetchTimeout = timeout
+			} else {
+				logger.Warn("Invalid fetch_timeout for lote registry, using default",
+					logging.F("value", loteCfg.FetchTimeout),
+					logging.F("error", err.Error()))
+			}
+		}
+
+		if loteCfg.RefreshInterval != "" {
+			if interval, err := time.ParseDuration(loteCfg.RefreshInterval); err == nil {
+				loteConfig.RefreshInterval = interval
+			} else {
+				logger.Warn("Invalid refresh_interval for lote registry, using default",
+					logging.F("value", loteCfg.RefreshInterval),
+					logging.F("error", err.Error()))
+			}
+		}
+
+		loteReg, err := lote.New(loteConfig)
+		if err != nil {
+			logger.Fatal("Failed to create LoTE registry from config",
+				logging.F("error", err.Error()))
+		}
+
+		if err := loteReg.StartRefreshLoop(context.Background()); err != nil {
+			logger.Fatal("Failed to start LoTE refresh loop",
+				logging.F("error", err.Error()))
+		}
+
+		registryMgr.Register(loteReg)
+		logger.Info("LoTE registry registered from config",
+			logging.F("sources", len(loteCfg.Sources)))
 	}
 
 	// Configure mDOC IACA registry from config
