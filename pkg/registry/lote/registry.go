@@ -68,6 +68,9 @@ type indexedEntity struct {
 	entity    etsi119602.TrustedEntity
 	territory string
 	keyHashes map[string]bool // SHA-256 fingerprints of all digital identities
+	// certPool contains X.509 certificates from this entity's digital identities,
+	// used as trust anchors for PKIX path validation of x5c requests.
+	certPool *x509.CertPool
 }
 
 var _ registry.TrustRegistry = (*Registry)(nil)
@@ -180,6 +183,9 @@ func (r *Registry) Evaluate(_ context.Context, req *authzen.EvaluationRequest) (
 	}
 
 	// Validate key binding.
+	// For x5c: try direct key match first, then PKIX path validation
+	// against the entity's X.509 trust anchors.
+	// For jwk: direct key match only.
 	keyHash, err := hashResourceKey(req)
 	if err != nil {
 		return &authzen.EvaluationResponse{
@@ -199,6 +205,13 @@ func (r *Registry) Evaluate(_ context.Context, req *authzen.EvaluationRequest) (
 				},
 			},
 		}, nil
+	}
+
+	// For x5c: attempt PKIX path validation if the entity has X.509 trust anchors.
+	if req.Resource.Type == "x5c" && ent.certPool != nil {
+		if resp := r.validateX5CChain(req, ent); resp != nil {
+			return resp, nil
+		}
 	}
 
 	return &authzen.EvaluationResponse{
@@ -241,6 +254,60 @@ func (r *Registry) Healthy() bool {
 
 func (r *Registry) Refresh(ctx context.Context) error {
 	return r.refresh()
+}
+
+// validateX5CChain attempts PKIX path validation of the x5c certificate chain
+// against the entity's X.509 trust anchors. Returns a positive response if
+// validation succeeds, nil if it fails (allowing the caller to fall through).
+func (r *Registry) validateX5CChain(req *authzen.EvaluationRequest, ent *indexedEntity) *authzen.EvaluationResponse {
+	certs, err := parseX5CCerts(req)
+	if err != nil || len(certs) == 0 {
+		return nil
+	}
+
+	opts := x509.VerifyOptions{
+		Roots: ent.certPool,
+	}
+	if len(certs) > 1 {
+		intermediates := x509.NewCertPool()
+		for _, cert := range certs[1:] {
+			intermediates.AddCert(cert)
+		}
+		opts.Intermediates = intermediates
+	}
+
+	if _, err := certs[0].Verify(opts); err == nil {
+		return &authzen.EvaluationResponse{
+			Decision: true,
+			Context: &authzen.EvaluationResponseContext{
+				Reason: map[string]interface{}{
+					"admin": fmt.Sprintf("x5c chain validates against trust anchor for entity %q (territory: %s)", ent.entity.EntityID, ent.territory),
+				},
+			},
+		}
+	}
+	return nil
+}
+
+// parseX5CCerts extracts X.509 certificates from an x5c resource key.
+func parseX5CCerts(req *authzen.EvaluationRequest) ([]*x509.Certificate, error) {
+	var certs []*x509.Certificate
+	for _, k := range req.Resource.Key {
+		b64, ok := k.(string)
+		if !ok {
+			continue
+		}
+		der, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode x5c cert: %w", err)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse x5c cert: %w", err)
+		}
+		certs = append(certs, cert)
+	}
+	return certs, nil
 }
 
 // --- internals ---
@@ -292,7 +359,7 @@ func buildIndex(lotes []*etsi119602.ListOfTrustedEntities) *entityIndex {
 				keyHashes: make(map[string]bool),
 			}
 
-			// Index digital identities
+			// Index digital identities and build cert pool for X.509 entries
 			for _, di := range ent.DigitalIdentities {
 				hashes := hashDigitalIdentity(di)
 				for _, h := range hashes {
@@ -302,6 +369,20 @@ func buildIndex(lotes []*etsi119602.ListOfTrustedEntities) *entityIndex {
 						idx.byKeyHash[h] = make(map[string]bool)
 					}
 					idx.byKeyHash[h][ent.EntityID] = true
+				}
+
+				// Add X.509 certs to the entity's cert pool for path validation
+				if di.Type == "x509" && di.X509Certificate != "" {
+					der, err := base64.StdEncoding.DecodeString(di.X509Certificate)
+					if err == nil {
+						cert, err := x509.ParseCertificate(der)
+						if err == nil {
+							if ie.certPool == nil {
+								ie.certPool = x509.NewCertPool()
+							}
+							ie.certPool.AddCert(cert)
+						}
+					}
 				}
 			}
 

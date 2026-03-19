@@ -2,10 +2,18 @@ package lote
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sirosfoundation/g119612/pkg/etsi119602"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
@@ -94,7 +102,7 @@ func TestEvaluate_GrantedEntity_JWKMatch(t *testing.T) {
 	require.NoError(t, err)
 
 	resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
-		Subject:  authzen.Subject{Type: "key", ID: "https://issuer.example.com"},
+		Subject: authzen.Subject{Type: "key", ID: "https://issuer.example.com"},
 		Resource: authzen.Resource{
 			Type: "jwk",
 			ID:   "https://issuer.example.com",
@@ -242,14 +250,14 @@ func TestMultipleSources(t *testing.T) {
 	dir := t.TempDir()
 
 	lote1 := &etsi119602.ListOfTrustedEntities{
-		Version: "1.0",
+		Version:           "1.0",
 		SchemeInformation: etsi119602.SchemeInformation{Territory: "SE"},
 		TrustedEntities: []etsi119602.TrustedEntity{
 			{EntityID: "https://se.example.com", EntityStatus: etsi119602.StatusGranted},
 		},
 	}
 	lote2 := &etsi119602.ListOfTrustedEntities{
-		Version: "1.0",
+		Version:           "1.0",
 		SchemeInformation: etsi119602.SchemeInformation{Territory: "NO"},
 		TrustedEntities: []etsi119602.TrustedEntity{
 			{EntityID: "https://no.example.com", EntityStatus: etsi119602.StatusGranted},
@@ -271,4 +279,206 @@ func TestMultipleSources(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.Decision, "should find %s", id)
 	}
+}
+
+// --- X.509 trust anchor / PKIX path validation tests ---
+
+// generateTestCA creates a self-signed CA certificate and key.
+func generateTestCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	require.NoError(t, err)
+
+	caCert, err := x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+	return caCert, caKey
+}
+
+// generateLeafCert creates a leaf certificate signed by the given CA.
+func generateLeafCert(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) *x509.Certificate {
+	t.Helper()
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "Leaf Cert"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	require.NoError(t, err)
+
+	leafCert, err := x509.ParseCertificate(leafDER)
+	require.NoError(t, err)
+	return leafCert
+}
+
+func TestEvaluate_X5C_TrustAnchor_PathValidation(t *testing.T) {
+	// Create a CA and a leaf cert signed by that CA
+	caCert, caKey := generateTestCA(t)
+	leafCert := generateLeafCert(t, caCert, caKey)
+
+	// Build a LoTE with the CA cert as a trust anchor
+	lote := &etsi119602.ListOfTrustedEntities{
+		Version: "1.0",
+		SchemeInformation: etsi119602.SchemeInformation{Territory: "SE"},
+		TrustedEntities: []etsi119602.TrustedEntity{
+			{
+				EntityID:     "https://ca.example.com",
+				EntityStatus: etsi119602.StatusGranted,
+				DigitalIdentities: []etsi119602.DigitalIdentity{
+					{
+						Type:            "x509",
+						X509Certificate: base64.StdEncoding.EncodeToString(caCert.Raw),
+					},
+				},
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	path := writeLoTE(t, dir, "lote.json", lote)
+	reg, err := New(Config{Sources: []string{path}})
+	require.NoError(t, err)
+
+	// Present the LEAF cert (not the CA cert) — should validate via PKIX path
+	resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+		Subject: authzen.Subject{Type: "key", ID: "https://ca.example.com"},
+		Resource: authzen.Resource{
+			Type: "x5c",
+			ID:   "https://ca.example.com",
+			Key: []interface{}{
+				base64.StdEncoding.EncodeToString(leafCert.Raw),
+				base64.StdEncoding.EncodeToString(caCert.Raw),
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Decision)
+	assert.Contains(t, resp.Context.Reason["admin"].(string), "trust anchor")
+}
+
+func TestEvaluate_X5C_DirectMatch_SameCert(t *testing.T) {
+	// When the presented cert IS the entity's cert — direct key match
+	caCert, _ := generateTestCA(t)
+
+	lote := &etsi119602.ListOfTrustedEntities{
+		Version: "1.0",
+		SchemeInformation: etsi119602.SchemeInformation{Territory: "SE"},
+		TrustedEntities: []etsi119602.TrustedEntity{
+			{
+				EntityID:     "https://ca.example.com",
+				EntityStatus: etsi119602.StatusGranted,
+				DigitalIdentities: []etsi119602.DigitalIdentity{
+					{
+						Type:            "x509",
+						X509Certificate: base64.StdEncoding.EncodeToString(caCert.Raw),
+					},
+				},
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	path := writeLoTE(t, dir, "lote.json", lote)
+	reg, err := New(Config{Sources: []string{path}})
+	require.NoError(t, err)
+
+	// Present the SAME cert (the CA cert) — should match via direct key hash
+	resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+		Subject: authzen.Subject{Type: "key", ID: "https://ca.example.com"},
+		Resource: authzen.Resource{
+			Type: "x5c",
+			ID:   "https://ca.example.com",
+			Key: []interface{}{
+				base64.StdEncoding.EncodeToString(caCert.Raw),
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Decision)
+	// Should match via direct key hash, not path validation
+	assert.Contains(t, resp.Context.Reason["admin"].(string), "key matches")
+}
+
+func TestEvaluate_X5C_UntrustedChain(t *testing.T) {
+	// CA in the LoTE, but leaf signed by a DIFFERENT CA
+	caCert, _ := generateTestCA(t)
+	otherCA, otherCAKey := generateTestCA(t)
+	leafFromOther := generateLeafCert(t, otherCA, otherCAKey)
+
+	lote := &etsi119602.ListOfTrustedEntities{
+		Version: "1.0",
+		SchemeInformation: etsi119602.SchemeInformation{Territory: "SE"},
+		TrustedEntities: []etsi119602.TrustedEntity{
+			{
+				EntityID:     "https://ca.example.com",
+				EntityStatus: etsi119602.StatusGranted,
+				DigitalIdentities: []etsi119602.DigitalIdentity{
+					{
+						Type:            "x509",
+						X509Certificate: base64.StdEncoding.EncodeToString(caCert.Raw),
+					},
+				},
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	path := writeLoTE(t, dir, "lote.json", lote)
+	reg, err := New(Config{Sources: []string{path}})
+	require.NoError(t, err)
+
+	// Leaf signed by otherCA, but only caCert is in the LoTE
+	resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+		Subject: authzen.Subject{Type: "key", ID: "https://ca.example.com"},
+		Resource: authzen.Resource{
+			Type: "x5c",
+			ID:   "https://ca.example.com",
+			Key: []interface{}{
+				base64.StdEncoding.EncodeToString(leafFromOther.Raw),
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Decision)
+	assert.Contains(t, resp.Context.Reason["admin"].(string), "does not match")
+}
+
+func TestEvaluate_X5C_JWKEntity_NoPathValidation(t *testing.T) {
+	// Entity with only JWK identity — x5c request should fail (no cert pool)
+	dir := t.TempDir()
+	path := writeLoTE(t, dir, "lote.json", testLoTE())
+	reg, err := New(Config{Sources: []string{path}})
+	require.NoError(t, err)
+
+	// Use a random cert for the x5c key
+	caCert, _ := generateTestCA(t)
+
+	resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+		Subject: authzen.Subject{Type: "key", ID: "https://issuer.example.com"},
+		Resource: authzen.Resource{
+			Type: "x5c",
+			ID:   "https://issuer.example.com",
+			Key: []interface{}{
+				base64.StdEncoding.EncodeToString(caCert.Raw),
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Decision)
 }
