@@ -20,16 +20,16 @@
 
 ## Overview
 
-Go-Trust is a multi-framework AuthZEN Trust Decision Point (PDP) server. It evaluates trust decisions across multiple trust registries including ETSI TS 119 612 Trust Status Lists (TSLs), OpenID Federation, and DID Web.
+Go-Trust is a multi-framework AuthZEN Trust Decision Point (PDP) server. It evaluates trust decisions across multiple trust registries including ETSI TS 119 612 Trust Status Lists (TSLs), ETSI TS 119 602 Lists of Trusted Entities (LoTEs), OpenID Federation, and DID Web.
 
 Go-Trust is designed to run inside the same trust domain as the entity that relies on trust evaluation (for instance a wallet unit or an issuer). It promotes interoperability across implementations that rely on ETSI trust status lists such as the EUDI wallet.
 
-> **Note:** For TSL processing (load, transform, sign, publish), use `tsl-tool` from [g119612](https://github.com/sirosfoundation/g119612). Go-trust consumes pre-processed TSL data.
+> **Note:** For TSL and LoTE processing (load, transform, convert, sign, publish), use `tsl-tool` from [g119612](https://github.com/sirosfoundation/g119612). Go-trust consumes pre-processed TSL/LoTE data.
 
 ## Features
 
 - **AuthZEN Compliant**: Implements the OASIS AuthZEN Trust Registry Profile for policy decisions
-- **Multi-Registry Architecture**: Parallel evaluation across ETSI TSL, OpenID Federation, and DID Web
+- **Multi-Registry Architecture**: Parallel evaluation across ETSI TSL, ETSI LoTE, OpenID Federation, and DID Web
 - **Flexible Resolution Strategies**: First-match, all-registries, best-match, or sequential
 - **Circuit Breaking**: Graceful handling of registry failures
 - **Rate Limiting**: Per-IP rate limiting for API protection
@@ -158,12 +158,12 @@ Go-Trust implements a flexible multi-registry architecture that allows multiple 
 │  AuthZEN Client │────▶│   Go-Trust PDP  │
 └─────────────────┘     └────────┬────────┘
                                  │
-         ┌───────────────────────┼───────────────────────┐
-         ▼                       ▼                       ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  ETSI TSL       │     │  OpenID Fed     │     │   DID Web       │
-│  Registry       │     │  Registry       │     │   Registry      │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
+    ┌────────────┬───────────────┼───────────────┬────────────┐
+    ▼            ▼               ▼               ▼            ▼
+┌────────┐ ┌────────┐   ┌─────────────┐ ┌───────────┐ ┌──────────┐
+│  ETSI  │ │  ETSI  │   │  OpenID Fed │ │  DID Web  │ │   mDOC   │
+│  TSL   │ │  LoTE  │   │  Registry   │ │  Registry │ │   IACA   │
+└────────┘ └────────┘   └─────────────┘ └───────────┘ └──────────┘
 ```
 
 ### TrustRegistry Interface
@@ -268,6 +268,61 @@ resp, err := reg.Evaluate(ctx, req)
 - Mobile driving license (mDL) issuer validation
 - EUDI wallet mDOC credential issuance
 - Any OpenID4VCI issuer publishing IACA certificates
+
+#### LoTE Registry (ETSI TS 119 602)
+
+Evaluates trust from ETSI TS 119 602 Lists of Trusted Entities (LoTE) — the JSON-based successor to XML Trust Status Lists. LoTE documents list trusted entities with their digital identities (X.509 certificates, JWK keys, or DIDs) and service descriptions.
+
+**Features:**
+- Loads LoTE JSON from URLs or local files
+- Indexes entities by ID and digital identity fingerprint
+- X.509 PKIX path validation against entity certificates
+- JWK key matching via SHA-256 fingerprints
+- Optional JWS signature verification on LoTE documents
+- Periodic refresh with configurable interval
+
+**Supported resource types:** `x5c`, `jwk`
+
+**Configuration (YAML config file):**
+
+```yaml
+registries:
+  lote:
+    enabled: true
+    name: "LoTE"
+    description: "ETSI TS 119 602 List of Trusted Entities"
+    sources:
+      - "https://example.com/lote-se.json"
+      - "https://example.com/lote-de.json"
+      - "/etc/go-trust/local-lote.json"
+    verify_jws: false
+    fetch_timeout: "30s"
+    refresh_interval: "1h"
+```
+
+**Programmatic usage:**
+
+```go
+import "github.com/sirosfoundation/go-trust/pkg/registry/lote"
+
+reg, err := lote.New(lote.Config{
+    Name:            "lote-eu",
+    Sources:         []string{"https://example.com/lote.json"},
+    RefreshInterval: time.Hour,
+})
+
+// Evaluate trust for an entity
+req := &authzen.EvaluationRequest{
+    Subject:  authzen.Subject{Type: "key", ID: "https://issuer.example.com"},
+    Resource: authzen.Resource{Type: "x5c", Key: []interface{}{certB64}},
+}
+resp, err := reg.Evaluate(ctx, req)
+```
+
+**Use cases:**
+- JSON-native trust evaluation for modern credential ecosystems
+- LoTE-based trust where entities are identified by JWK, X.509, or DID
+- Transition from XML TSL to JSON LoTE format
 
 ### Static Trust Registries
 
@@ -399,6 +454,7 @@ policies:
 | Constraint Type | Description | Applicable Registries |
 |-----------------|-------------|----------------------|
 | `etsi` | Service types, statuses, countries | ETSI TSL |
+| `lote` | Entity types, statuses, territories | ETSI LoTE |
 | `oidfed` | Entity types, trust marks | OpenID Federation |
 | `did` | Allowed domains, verifiable history | DID Web, DID Web VH |
 | `mdociaca` | Issuer allowlist, IACA endpoint | mDOC IACA |
@@ -605,10 +661,12 @@ go-trust/
 │   ├── api/        # HTTP API implementation
 │   ├── authzen/    # AuthZEN protocol types
 │   ├── registry/   # Trust registry interface and manager
-│   │   ├── etsi/     # ETSI TSL registry
+│   │   ├── etsi/     # ETSI TSL registry (XML, TS 119 612)
+│   │   ├── lote/     # ETSI LoTE registry (JSON, TS 119 602)
 │   │   ├── oidfed/   # OpenID Federation registry
 │   │   ├── didweb/   # DID Web registry
 │   │   ├── didwebvh/ # DID Web VH registry
+│   │   ├── mdociaca/ # mDOC IACA registry
 │   │   └── static/   # Static registries (always/never/system/whitelist)
 │   ├── logging/    # Structured logging
 │   └── testserver/ # Embedded test server
@@ -631,10 +689,11 @@ git push origin feature/amazing-feature
 
 ## Related Projects
 
-- [g119612](https://github.com/sirosfoundation/g119612) - ETSI TSL processing library and `tsl-tool` CLI
+- [g119612](https://github.com/sirosfoundation/g119612) - ETSI TSL and LoTE processing library and `tsl-tool` CLI
 - [go-oidfed/lib](https://github.com/go-oidfed/lib) - OpenID Federation library
 - [AuthZEN Specification](https://openid.net/wg/authzen/specifications/)
-- [ETSI TS 119612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/)
+- [ETSI TS 119612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/) - Trust Status Lists (XML)
+- [ETSI TS 119602](https://www.etsi.org/deliver/etsi_ts/119600_119699/119602/) - Lists of Trusted Entities (JSON)
 
 ## License
 

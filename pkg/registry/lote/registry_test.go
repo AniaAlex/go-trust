@@ -334,7 +334,7 @@ func TestEvaluate_X5C_TrustAnchor_PathValidation(t *testing.T) {
 
 	// Build a LoTE with the CA cert as a trust anchor
 	lote := &etsi119602.ListOfTrustedEntities{
-		Version: "1.0",
+		Version:           "1.0",
 		SchemeInformation: etsi119602.SchemeInformation{Territory: "SE"},
 		TrustedEntities: []etsi119602.TrustedEntity{
 			{
@@ -377,7 +377,7 @@ func TestEvaluate_X5C_DirectMatch_SameCert(t *testing.T) {
 	caCert, _ := generateTestCA(t)
 
 	lote := &etsi119602.ListOfTrustedEntities{
-		Version: "1.0",
+		Version:           "1.0",
 		SchemeInformation: etsi119602.SchemeInformation{Territory: "SE"},
 		TrustedEntities: []etsi119602.TrustedEntity{
 			{
@@ -422,7 +422,7 @@ func TestEvaluate_X5C_UntrustedChain(t *testing.T) {
 	leafFromOther := generateLeafCert(t, otherCA, otherCAKey)
 
 	lote := &etsi119602.ListOfTrustedEntities{
-		Version: "1.0",
+		Version:           "1.0",
 		SchemeInformation: etsi119602.SchemeInformation{Territory: "SE"},
 		TrustedEntities: []etsi119602.TrustedEntity{
 			{
