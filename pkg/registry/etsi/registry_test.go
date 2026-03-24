@@ -1196,7 +1196,7 @@ func TestTSLRegistry_Refresh_WithRealTSL(t *testing.T) {
 
 // TestExtractCertsFromTSL_NilTSL tests extractCertsFromTSL with nil input
 func TestExtractCertsFromTSL_NilTSL(t *testing.T) {
-	certs := extractCertsFromTSL(nil)
+	certs := extractCertsFromTSL(nil, nil)
 	if len(certs) != 0 {
 		t.Errorf("expected 0 certs from nil TSL, got %d", len(certs))
 	}

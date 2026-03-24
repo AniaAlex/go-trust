@@ -40,6 +40,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirosfoundation/go-cryptoutil"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
@@ -62,6 +63,10 @@ type Config struct {
 
 	// HTTPTimeout is the timeout for HTTP requests. Default: 30 seconds.
 	HTTPTimeout time.Duration
+
+	// CryptoExt provides extensible certificate parsing for non-standard curves
+	// (e.g. brainpool). If nil, standard x509.ParseCertificate is used.
+	CryptoExt *cryptoutil.Extensions
 }
 
 // IssuerMetadata represents OpenID4VCI credential issuer metadata (partial).
@@ -314,7 +319,7 @@ func (r *Registry) parseX5CChain(key interface{}) ([]*x509.Certificate, error) {
 		if err != nil {
 			return nil, fmt.Errorf("certificate %d: invalid base64: %w", i, err)
 		}
-		cert, err := x509.ParseCertificate(der)
+		cert, err := registry.ParseCertificate(der, r.config.CryptoExt)
 		if err != nil {
 			return nil, fmt.Errorf("certificate %d: invalid X.509: %w", i, err)
 		}
@@ -420,7 +425,7 @@ func (r *Registry) fetchIACACerts(ctx context.Context, url string) ([]*x509.Cert
 		if err != nil {
 			return nil, fmt.Errorf("IACA %d: invalid base64: %w", i, err)
 		}
-		cert, err := x509.ParseCertificate(der)
+		cert, err := registry.ParseCertificate(der, r.config.CryptoExt)
 		if err != nil {
 			return nil, fmt.Errorf("IACA %d: invalid X.509: %w", i, err)
 		}

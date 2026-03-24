@@ -24,6 +24,7 @@ import (
 
 	oidfed "github.com/go-oidfed/lib"
 	oidfedjwx "github.com/go-oidfed/lib/jwx"
+	"github.com/sirosfoundation/go-cryptoutil"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
@@ -184,6 +185,8 @@ type OIDFedRegistry struct {
 	cache *MetadataCache
 	// maxChainDepth is the maximum trust chain resolution depth.
 	maxChainDepth int
+	// cryptoExt provides extensible certificate parsing for non-standard curves.
+	cryptoExt *cryptoutil.Extensions
 }
 
 // Config holds configuration for creating an OIDFedRegistry.
@@ -219,6 +222,10 @@ type Config struct {
 
 	// MaxChainDepth is the maximum trust chain resolution depth (default: 10)
 	MaxChainDepth int `json:"max_chain_depth,omitempty"`
+
+	// CryptoExt provides extensible certificate parsing for non-standard curves
+	// (e.g. brainpool). If nil, standard x509.ParseCertificate is used.
+	CryptoExt *cryptoutil.Extensions `json:"-"`
 }
 
 // TrustAnchorConfig defines a single trust anchor for OpenID Federation.
@@ -270,6 +277,7 @@ func NewOIDFedRegistry(config Config) (*OIDFedRegistry, error) {
 		description:        description,
 		cache:              NewMetadataCache(config.CacheTTL, config.MaxCacheSize),
 		maxChainDepth:      maxChainDepth,
+		cryptoExt:          config.CryptoExt,
 	}, nil
 }
 
@@ -942,7 +950,7 @@ func (r *OIDFedRegistry) extractCertificates(chain oidfed.TrustChain) []*x509.Ce
 					continue
 				}
 				// Parse the DER-encoded certificate
-				cert, err := x509.ParseCertificate(certBytes)
+				cert, err := registry.ParseCertificate(certBytes, r.cryptoExt)
 				if err == nil && cert != nil {
 					certificates = append(certificates, cert)
 				}

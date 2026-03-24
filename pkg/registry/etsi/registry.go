@@ -44,6 +44,7 @@ import (
 
 	"github.com/sirosfoundation/g119612/pkg/etsi119612"
 	"github.com/sirosfoundation/g119612/pkg/utils/x509util"
+	"github.com/sirosfoundation/go-cryptoutil"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
@@ -101,6 +102,10 @@ type TSLConfig struct {
 	// When false, signature verification is opportunistic (verify if signer certs are configured).
 	// Default: false
 	RequireSignature bool
+
+	// CryptoExt provides extensible certificate parsing for non-standard curves
+	// (e.g. brainpool). If nil, standard x509.ParseCertificate is used.
+	CryptoExt *cryptoutil.Extensions
 }
 
 // TSLRegistry implements TrustRegistry for ETSI TS 119 612 Trust Status Lists.
@@ -300,7 +305,7 @@ func (r *TSLRegistry) loadCertBundle(path string) (*x509.CertPool, int, error) {
 			break
 		}
 		if block.Type == "CERTIFICATE" {
-			cert, err := x509.ParseCertificate(block.Bytes)
+			cert, err := registry.ParseCertificate(block.Bytes, r.config.CryptoExt)
 			if err != nil {
 				// Log warning but continue - one bad cert shouldn't fail the whole bundle
 				continue
@@ -339,7 +344,7 @@ func (r *TSLRegistry) loadLOTLSignerBundle(path string) ([]*x509.Certificate, er
 			break
 		}
 		if block.Type == "CERTIFICATE" {
-			cert, err := x509.ParseCertificate(block.Bytes)
+			cert, err := registry.ParseCertificate(block.Bytes, r.config.CryptoExt)
 			if err != nil {
 				// Log warning but continue
 				continue
@@ -427,7 +432,7 @@ func (r *TSLRegistry) loadLocalTSL(path string) (*etsi119612.TSL, []*x509.Certif
 	}
 
 	// Extract certificates from TSL
-	certs := extractCertsFromTSL(tsl)
+	certs := extractCertsFromTSL(tsl, r.config.CryptoExt)
 
 	return tsl, certs, nil
 }
@@ -471,7 +476,7 @@ func (r *TSLRegistry) loadTSLFromURL(url string) ([]*etsi119612.TSL, []*x509.Cer
 	// Extract certificates from all loaded TSLs
 	var allCerts []*x509.Certificate
 	for _, tsl := range tsls {
-		certs := extractCertsFromTSL(tsl)
+		certs := extractCertsFromTSL(tsl, r.config.CryptoExt)
 		allCerts = append(allCerts, certs...)
 	}
 
@@ -479,7 +484,7 @@ func (r *TSLRegistry) loadTSLFromURL(url string) ([]*etsi119612.TSL, []*x509.Cer
 }
 
 // extractCertsFromTSL extracts all X.509 certificates from a TSL.
-func extractCertsFromTSL(tsl *etsi119612.TSL) []*x509.Certificate {
+func extractCertsFromTSL(tsl *etsi119612.TSL, ext *cryptoutil.Extensions) []*x509.Certificate {
 	var certs []*x509.Certificate
 
 	if tsl == nil || tsl.StatusList.TslTrustServiceProviderList == nil {
@@ -494,7 +499,7 @@ func extractCertsFromTSL(tsl *etsi119612.TSL) []*x509.Certificate {
 			if service == nil || service.TslServiceInformation == nil {
 				continue
 			}
-			serviceCerts := extractCertsFromService(service)
+			serviceCerts := extractCertsFromService(service, ext)
 			certs = append(certs, serviceCerts...)
 		}
 	}
@@ -503,7 +508,7 @@ func extractCertsFromTSL(tsl *etsi119612.TSL) []*x509.Certificate {
 }
 
 // extractCertsFromService extracts X.509 certificates from a TSL service entry.
-func extractCertsFromService(service *etsi119612.TSPServiceType) []*x509.Certificate {
+func extractCertsFromService(service *etsi119612.TSPServiceType, ext *cryptoutil.Extensions) []*x509.Certificate {
 	var certs []*x509.Certificate
 
 	if service.TslServiceInformation == nil ||
@@ -520,7 +525,7 @@ func extractCertsFromService(service *etsi119612.TSPServiceType) []*x509.Certifi
 		if err != nil {
 			continue
 		}
-		cert, err := x509.ParseCertificate(certBytes)
+		cert, err := registry.ParseCertificate(certBytes, ext)
 		if err != nil {
 			continue
 		}

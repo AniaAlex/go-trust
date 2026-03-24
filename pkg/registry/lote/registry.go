@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sirosfoundation/g119612/pkg/etsi119602"
+	"github.com/sirosfoundation/go-cryptoutil"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
 	"github.com/sirosfoundation/go-trust/pkg/registry"
 )
@@ -40,6 +41,10 @@ type Config struct {
 
 	// Logger for structured logging. May be nil.
 	Logger *slog.Logger
+
+	// CryptoExt provides extensible certificate parsing for non-standard curves
+	// (e.g. brainpool). If nil, standard x509.ParseCertificate is used.
+	CryptoExt *cryptoutil.Extensions
 }
 
 // Registry is a TrustRegistry backed by ETSI TS 119 602 LoTE documents.
@@ -186,7 +191,7 @@ func (r *Registry) Evaluate(_ context.Context, req *authzen.EvaluationRequest) (
 	// For x5c: try direct key match first, then PKIX path validation
 	// against the entity's X.509 trust anchors.
 	// For jwk: direct key match only.
-	keyHash, err := hashResourceKey(req)
+	keyHash, err := hashResourceKey(req, r.config.CryptoExt)
 	if err != nil {
 		return &authzen.EvaluationResponse{
 			Decision: false,
@@ -260,7 +265,7 @@ func (r *Registry) Refresh(ctx context.Context) error {
 // against the entity's X.509 trust anchors. Returns a positive response if
 // validation succeeds, nil if it fails (allowing the caller to fall through).
 func (r *Registry) validateX5CChain(req *authzen.EvaluationRequest, ent *indexedEntity) *authzen.EvaluationResponse {
-	certs, err := parseX5CCerts(req)
+	certs, err := parseX5CCerts(req, r.config.CryptoExt)
 	if err != nil || len(certs) == 0 {
 		return nil
 	}
@@ -290,7 +295,7 @@ func (r *Registry) validateX5CChain(req *authzen.EvaluationRequest, ent *indexed
 }
 
 // parseX5CCerts extracts X.509 certificates from an x5c resource key.
-func parseX5CCerts(req *authzen.EvaluationRequest) ([]*x509.Certificate, error) {
+func parseX5CCerts(req *authzen.EvaluationRequest, ext *cryptoutil.Extensions) ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
 	for _, k := range req.Resource.Key {
 		b64, ok := k.(string)
@@ -301,7 +306,7 @@ func parseX5CCerts(req *authzen.EvaluationRequest) ([]*x509.Certificate, error) 
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode x5c cert: %w", err)
 		}
-		cert, err := x509.ParseCertificate(der)
+		cert, err := registry.ParseCertificate(der, ext)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse x5c cert: %w", err)
 		}
@@ -327,7 +332,7 @@ func (r *Registry) refresh() error {
 		lotes = append(lotes, lote)
 	}
 
-	idx := buildIndex(lotes)
+	idx := buildIndex(lotes, r.config.CryptoExt)
 
 	r.mu.Lock()
 	r.lotes = lotes
@@ -344,7 +349,7 @@ func (r *Registry) refresh() error {
 	return nil
 }
 
-func buildIndex(lotes []*etsi119602.ListOfTrustedEntities) *entityIndex {
+func buildIndex(lotes []*etsi119602.ListOfTrustedEntities, ext *cryptoutil.Extensions) *entityIndex {
 	idx := &entityIndex{
 		byID:      make(map[string]*indexedEntity),
 		byKeyHash: make(map[string]map[string]bool),
@@ -361,7 +366,7 @@ func buildIndex(lotes []*etsi119602.ListOfTrustedEntities) *entityIndex {
 
 			// Index digital identities and build cert pool for X.509 entries
 			for _, di := range ent.DigitalIdentities {
-				hashes := hashDigitalIdentity(di)
+				hashes := hashDigitalIdentity(di, ext)
 				for _, h := range hashes {
 					ie.keyHashes[h] = true
 
@@ -375,7 +380,7 @@ func buildIndex(lotes []*etsi119602.ListOfTrustedEntities) *entityIndex {
 				if di.Type == "x509" && di.X509Certificate != "" {
 					der, err := base64.StdEncoding.DecodeString(di.X509Certificate)
 					if err == nil {
-						cert, err := x509.ParseCertificate(der)
+						cert, err := registry.ParseCertificate(der, ext)
 						if err == nil {
 							if ie.certPool == nil {
 								ie.certPool = x509.NewCertPool()
@@ -394,7 +399,7 @@ func buildIndex(lotes []*etsi119602.ListOfTrustedEntities) *entityIndex {
 }
 
 // hashDigitalIdentity produces SHA-256 fingerprints for a LoTE digital identity.
-func hashDigitalIdentity(di etsi119602.DigitalIdentity) []string {
+func hashDigitalIdentity(di etsi119602.DigitalIdentity, ext *cryptoutil.Extensions) []string {
 	var hashes []string
 
 	switch di.Type {
@@ -402,7 +407,7 @@ func hashDigitalIdentity(di etsi119602.DigitalIdentity) []string {
 		if di.X509Certificate != "" {
 			der, err := base64.StdEncoding.DecodeString(di.X509Certificate)
 			if err == nil {
-				cert, err := x509.ParseCertificate(der)
+				cert, err := registry.ParseCertificate(der, ext)
 				if err == nil {
 					// Hash the public key
 					pubDER, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
@@ -486,7 +491,7 @@ func hashJWKPublicKey(jwk map[string]interface{}) string {
 
 // hashResourceKey produces a SHA-256 fingerprint from a request resource key,
 // using the same algorithm as hashDigitalIdentity so values match.
-func hashResourceKey(req *authzen.EvaluationRequest) (string, error) {
+func hashResourceKey(req *authzen.EvaluationRequest, ext *cryptoutil.Extensions) (string, error) {
 	if len(req.Resource.Key) == 0 {
 		return "", fmt.Errorf("resource.key is empty")
 	}
@@ -502,7 +507,7 @@ func hashResourceKey(req *authzen.EvaluationRequest) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to decode x5c cert: %w", err)
 		}
-		cert, err := x509.ParseCertificate(der)
+		cert, err := registry.ParseCertificate(der, ext)
 		if err != nil {
 			return "", fmt.Errorf("failed to parse x5c cert: %w", err)
 		}
