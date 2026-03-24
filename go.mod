@@ -2,7 +2,7 @@ module github.com/sirosfoundation/go-trust
 
 go 1.25.1
 
-replace github.com/moov-io/signedxml v1.2.3 => github.com/sirosfoundation/signedxml v1.3.0-siros1
+replace github.com/moov-io/signedxml v1.2.3 => github.com/sirosfoundation/signedxml v1.4.0-siros1
 
 replace github.com/russellhaering/goxmldsig v1.5.0 => github.com/sirosfoundation/goxmldsig v1.6.0-siros1
 
