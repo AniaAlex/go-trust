@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"vc/pkg/vc20/crypto/jcs"
+	"github.com/SUNET/vc/pkg/vc20/crypto/jcs"
 
 	"github.com/multiformats/go-multibase"
 	"github.com/sirosfoundation/go-trust/pkg/authzen"
