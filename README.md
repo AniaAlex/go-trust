@@ -5,16 +5,12 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/sirosfoundation/go-trust.svg)](https://pkg.go.dev/github.com/sirosfoundation/go-trust)
 [![Go Report Card](https://goreportcard.com/badge/github.com/sirosfoundation/go-trust)](https://goreportcard.com/report/github.com/sirosfoundation/go-trust)
 [![Coverage](https://raw.githubusercontent.com/sirosfoundation/go-trust/badges/.badges/main/coverage.svg)](https://github.com/sirosfoundation/go-trust/actions/workflows/go.yml)
-[![Go Compatibility](https://raw.githubusercontent.com/sirosfoundation/go-trust/badges/.badges/main/golang.svg)](https://go.dev/)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/sirosfoundation/go-trust/go.yml?branch=main)](https://github.com/sirosfoundation/go-trust/actions)
 [![License](https://img.shields.io/badge/License-BSD_2--Clause-orange.svg)](https://opensource.org/licenses/BSD-2-Clause)
 [![Latest Release](https://img.shields.io/github/v/release/sirosfoundation/go-trust?include_prereleases)](https://github.com/sirosfoundation/go-trust/releases)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/sirosfoundation/go-trust)](https://go.dev/)
-
 [![Issues](https://img.shields.io/github/issues/sirosfoundation/go-trust)](https://github.com/sirosfoundation/go-trust/issues)
-[![Last Commit](https://img.shields.io/github/last-commit/sirosfoundation/go-trust)](https://github.com/sirosfoundation/go-trust/commits/main)
 [![CodeQL](https://github.com/sirosfoundation/go-trust/actions/workflows/codeql.yml/badge.svg)](https://github.com/sirosfoundation/go-trust/actions/workflows/codeql.yml)
-[![Dependency Status](https://img.shields.io/librariesio/github/sirosfoundation/go-trust)](https://libraries.io/github/sirosfoundation/go-trust)
 
 </div>
 
