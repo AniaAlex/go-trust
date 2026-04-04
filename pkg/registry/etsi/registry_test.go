@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -302,13 +303,14 @@ func TestTSLRegistry_SupportedResourceTypes(t *testing.T) {
 	}
 
 	types := reg.SupportedResourceTypes()
-	if len(types) != 3 {
-		t.Errorf("expected 3 supported types, got %d", len(types))
+	if len(types) != 4 {
+		t.Errorf("expected 4 supported types, got %d: %v", len(types), types)
 	}
 
 	foundX5C := false
 	foundJWK := false
 	foundX509SanDNS := false
+	foundX509SanURI := false
 	for _, typ := range types {
 		if typ == "x5c" {
 			foundX5C = true
@@ -319,6 +321,9 @@ func TestTSLRegistry_SupportedResourceTypes(t *testing.T) {
 		if typ == "x509_san_dns" {
 			foundX509SanDNS = true
 		}
+		if typ == "x509_san_uri" {
+			foundX509SanURI = true
+		}
 	}
 	if !foundX5C {
 		t.Error("expected x5c in supported types")
@@ -328,6 +333,9 @@ func TestTSLRegistry_SupportedResourceTypes(t *testing.T) {
 	}
 	if !foundX509SanDNS {
 		t.Error("expected x509_san_dns in supported types")
+	}
+	if !foundX509SanURI {
+		t.Error("expected x509_san_uri in supported types")
 	}
 }
 
@@ -1780,5 +1788,321 @@ func TestTSLRegistry_RequireSignature(t *testing.T) {
 	// The RequireSignature check happens when loading TSL files, not cert bundles
 	if err != nil {
 		t.Fatalf("unexpected error creating registry: %v", err)
+	}
+}
+
+// generateTestCertificateWithURISAN creates a self-signed test certificate with URI SANs
+func generateTestCertificateWithURISAN(t *testing.T, cn string, uriSANs []string) (*x509.Certificate, []byte) {
+	t.Helper()
+
+	// Generate RSA key
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+
+	// Parse URI strings into url.URL objects
+	uris := make([]*url.URL, 0, len(uriSANs))
+	for _, uriStr := range uriSANs {
+		u, err := url.Parse(uriStr)
+		if err != nil {
+			t.Fatalf("failed to parse URI %s: %v", uriStr, err)
+		}
+		uris = append(uris, u)
+	}
+
+	// Create certificate template with URI SANs
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName:   cn,
+			Organization: []string{"Test Organization"},
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		URIs:                  uris,
+	}
+
+	// Create self-signed certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+
+	// Parse the DER certificate back
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("failed to parse certificate: %v", err)
+	}
+
+	// Encode to PEM
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certDER,
+	})
+
+	return cert, pemBytes
+}
+
+// TestTSLRegistry_Evaluate_X509SanURI tests x509_san_uri resource type validation
+func TestTSLRegistry_Evaluate_X509SanURI(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-x509-san-uri-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate with URI SANs
+	uriSANs := []string{
+		"https://verifier.example.com/app",
+		"https://wallet.example.org/client",
+		"urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
+	}
+	cert, pemData := generateTestCertificateWithURISAN(t, "Test CA", uriSANs)
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	// Create registry with this certificate as trust anchor
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "x509-san-uri-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Encode certificate as base64 for x5c array
+	certB64 := base64.StdEncoding.EncodeToString(cert.Raw)
+
+	tests := []struct {
+		name        string
+		clientID    string
+		expectMatch bool
+		expectError string
+	}{
+		{
+			name:        "exact match https URI",
+			clientID:    "https://verifier.example.com/app",
+			expectMatch: true,
+		},
+		{
+			name:        "exact match URN",
+			clientID:    "urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
+			expectMatch: true,
+		},
+		{
+			name:        "no match - different path",
+			clientID:    "https://verifier.example.com/other",
+			expectMatch: false,
+			expectError: "not found in certificate URI SANs",
+		},
+		{
+			name:        "no match - different host",
+			clientID:    "https://attacker.com/app",
+			expectMatch: false,
+			expectError: "not found in certificate URI SANs",
+		},
+		{
+			name:        "no match - DNS name used with URI scheme",
+			clientID:    "verifier.example.com",
+			expectMatch: false,
+			expectError: "not found in certificate URI SANs",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &authzen.EvaluationRequest{
+				Subject: authzen.Subject{
+					Type: "key",
+					ID:   tc.clientID,
+				},
+				Resource: authzen.Resource{
+					Type: "x509_san_uri",
+					ID:   tc.clientID,
+					Key:  []interface{}{certB64},
+				},
+			}
+
+			resp, err := reg.Evaluate(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tc.expectMatch && !resp.Decision {
+				t.Errorf("expected decision=true, got false")
+				if resp.Context != nil && resp.Context.Reason != nil {
+					t.Logf("reason: %+v", resp.Context.Reason)
+				}
+			}
+
+			if !tc.expectMatch && resp.Decision {
+				t.Error("expected decision=false, got true")
+			}
+
+			if tc.expectError != "" && !resp.Decision {
+				if resp.Context == nil || resp.Context.Reason == nil {
+					t.Error("expected error in reason but got nil context")
+				} else if errMsg, ok := resp.Context.Reason["error"].(string); ok {
+					if !strings.Contains(errMsg, tc.expectError) {
+						t.Errorf("expected error to contain %q, got %q", tc.expectError, errMsg)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestTSLRegistry_Evaluate_X509SanURI_NoURISANs tests x509_san_uri with certificate without URI SANs
+func TestTSLRegistry_Evaluate_X509SanURI_NoURISANs(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-x509-san-uri-no-san-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate WITHOUT URI SANs (but WITH DNS SANs to test scheme mismatch)
+	cert, pemData := generateTestCertificateWithDNSSAN(t, "Test CA", []string{"example.com"})
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	// Create registry with this certificate as trust anchor
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "x509-san-uri-no-san-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	// Encode certificate as base64 for x5c array
+	certB64 := base64.StdEncoding.EncodeToString(cert.Raw)
+
+	req := &authzen.EvaluationRequest{
+		Subject: authzen.Subject{
+			Type: "key",
+			ID:   "https://example.com/app",
+		},
+		Resource: authzen.Resource{
+			Type: "x509_san_uri",
+			ID:   "https://example.com/app",
+			Key:  []interface{}{certB64},
+		},
+	}
+
+	resp, err := reg.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.Decision {
+		t.Error("expected decision=false for certificate without URI SANs")
+	}
+
+	// Verify error message includes hint about scheme mismatch
+	if resp.Context != nil && resp.Context.Reason != nil {
+		if hint, ok := resp.Context.Reason["scheme_mismatch"].(string); ok {
+			if !strings.Contains(hint, "x509_san_dns") {
+				t.Errorf("expected scheme_mismatch hint to mention x509_san_dns, got %q", hint)
+			}
+		}
+	}
+}
+
+// TestTSLRegistry_UnsupportedResourceType tests error messages for unsupported resource types
+func TestTSLRegistry_UnsupportedResourceType(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "tsl-unsupported-type-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Generate test certificate
+	cert, pemData := generateTestCertificate(t, "Test CA")
+	certPath := writeTestCertFile(t, tmpDir, "test-ca.pem", pemData)
+
+	// Create registry
+	reg, err := NewTSLRegistry(TSLConfig{
+		Name:       "unsupported-type-test",
+		CertBundle: certPath,
+	})
+	if err != nil {
+		t.Fatalf("failed to create registry: %v", err)
+	}
+
+	certB64 := base64.StdEncoding.EncodeToString(cert.Raw)
+
+	tests := []struct {
+		name            string
+		resourceType    string
+		expectKnown     bool // known-but-unsupported vs completely unknown
+		expectSecNote   bool // should include security note
+	}{
+		{
+			name:          "completely unknown type",
+			resourceType:  "totally_invalid",
+			expectKnown:   false,
+			expectSecNote: false,
+		},
+		{
+			name:          "known but unsupported - x509_san_email",
+			resourceType:  "x509_san_email",
+			expectKnown:   true,
+			expectSecNote: true,
+		},
+		{
+			name:          "known but unsupported - x509_san_ip",
+			resourceType:  "x509_san_ip",
+			expectKnown:   true,
+			expectSecNote: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &authzen.EvaluationRequest{
+				Subject: authzen.Subject{
+					Type: "key",
+					ID:   "test",
+				},
+				Resource: authzen.Resource{
+					Type: tc.resourceType,
+					ID:   "test",
+					Key:  []interface{}{certB64},
+				},
+			}
+
+			resp, err := reg.Evaluate(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if resp.Decision {
+				t.Error("expected decision=false for unsupported type")
+			}
+
+			if resp.Context == nil || resp.Context.Reason == nil {
+				t.Fatal("expected reason in response")
+			}
+
+			// Check for security note presence
+			_, hasSecNote := resp.Context.Reason["security_note"]
+			if tc.expectSecNote && !hasSecNote {
+				t.Error("expected security_note in response for known-but-unsupported type")
+			}
+			if !tc.expectSecNote && hasSecNote {
+				t.Error("unexpected security_note in response for unknown type")
+			}
+
+			// Check for supported_types list
+			if _, ok := resp.Context.Reason["supported_types"]; !ok {
+				t.Error("expected supported_types in response")
+			}
+		})
 	}
 }

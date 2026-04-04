@@ -669,16 +669,35 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 	var parseErr error
 
 	switch req.Resource.Type {
-	case "x5c", "x509_san_dns":
+	case "x5c", "x509_san_dns", "x509_san_uri":
 		certs, parseErr = x509util.ParseX5CFromArray(req.Resource.Key)
 	case "jwk":
 		certs, parseErr = x509util.ParseX5CFromJWK(req.Resource.Key)
 	default:
+		// Distinguish between known-but-unsupported schemes and completely unknown ones
+		// This helps with security monitoring and debugging
+		knownUnsupported := map[string]string{
+			"x509_san_email": "email SAN validation not yet implemented",
+			"x509_san_ip":    "IP address SAN validation not yet implemented",
+		}
+		if hint, known := knownUnsupported[req.Resource.Type]; known {
+			return &authzen.EvaluationResponse{
+				Decision: false,
+				Context: &authzen.EvaluationResponseContext{
+					Reason: map[string]interface{}{
+						"error":           fmt.Sprintf("resource type '%s' is recognized but not supported: %s", req.Resource.Type, hint),
+						"supported_types": r.SupportedResourceTypes(),
+						"security_note":   "this may indicate a client misconfiguration or attempted scheme mismatch attack",
+					},
+				},
+			}, nil
+		}
 		return &authzen.EvaluationResponse{
 			Decision: false,
 			Context: &authzen.EvaluationResponseContext{
 				Reason: map[string]interface{}{
-					"error": fmt.Sprintf("unsupported resource type: %s (expected x5c, jwk, or x509_san_dns)", req.Resource.Type),
+					"error":           fmt.Sprintf("unsupported resource type: %s", req.Resource.Type),
+					"supported_types": r.SupportedResourceTypes(),
 				},
 			},
 		}, nil
@@ -784,9 +803,46 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 				Decision: false,
 				Context: &authzen.EvaluationResponseContext{
 					Reason: map[string]interface{}{
-						"error":         fmt.Sprintf("subject.id '%s' not found in certificate DNS SANs", clientID),
-						"dns_sans":      leafCert.DNSNames,
-						"validation_ms": validationDuration.Milliseconds(),
+						"error":           fmt.Sprintf("subject.id '%s' not found in certificate DNS SANs", clientID),
+						"dns_sans":        leafCert.DNSNames,
+						"validation_ms":   validationDuration.Milliseconds(),
+						"scheme_mismatch": "ensure client_id_scheme matches certificate SAN type (use x509_san_uri for URI SANs)",
+					},
+				},
+			}, nil
+		}
+	}
+
+	// For x509_san_uri, verify that Subject.ID matches a URI SAN in the leaf certificate
+	// This implements OpenID4VP section 5.9.4 client_id verification for URI-based identifiers
+	if req.Resource.Type == "x509_san_uri" {
+		clientID := req.Subject.ID
+		leafCert := certs[0]
+		sanMatched := false
+
+		for _, uri := range leafCert.URIs {
+			if uri != nil && uri.String() == clientID {
+				sanMatched = true
+				break
+			}
+		}
+
+		if !sanMatched {
+			// Extract URI strings for error response
+			uriSANs := make([]string, 0, len(leafCert.URIs))
+			for _, uri := range leafCert.URIs {
+				if uri != nil {
+					uriSANs = append(uriSANs, uri.String())
+				}
+			}
+			return &authzen.EvaluationResponse{
+				Decision: false,
+				Context: &authzen.EvaluationResponseContext{
+					Reason: map[string]interface{}{
+						"error":           fmt.Sprintf("subject.id '%s' not found in certificate URI SANs", clientID),
+						"uri_sans":        uriSANs,
+						"validation_ms":   validationDuration.Milliseconds(),
+						"scheme_mismatch": "ensure client_id_scheme matches certificate SAN type (use x509_san_dns for DNS SANs)",
 					},
 				},
 			}, nil
@@ -814,8 +870,9 @@ func (r *TSLRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationReque
 // - x5c: X.509 certificate chain (validates chain against TSL)
 // - jwk: JWK with x5c claim (validates chain against TSL)
 // - x509_san_dns: OpenID4VP client_id type where Subject.ID must match a DNS SAN in the certificate
+// - x509_san_uri: OpenID4VP client_id type where Subject.ID must match a URI SAN in the certificate
 func (r *TSLRegistry) SupportedResourceTypes() []string {
-	return []string{"x5c", "jwk", "x509_san_dns"}
+	return []string{"x5c", "jwk", "x509_san_dns", "x509_san_uri"}
 }
 
 // SupportsResolutionOnly returns false - ETSI TSL requires certificate validation.
