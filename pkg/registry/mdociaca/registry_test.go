@@ -173,6 +173,8 @@ func (m *mockIssuerServer) URL() string {
 // =============================================================================
 
 func TestNew_DefaultConfig(t *testing.T) {
+	// Test with nil config to verify default config handling.
+	// This is safe because New() doesn't perform network calls.
 	reg, err := New(nil)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -196,6 +198,7 @@ func TestNew_CustomConfig(t *testing.T) {
 		IssuerAllowlist: []string{"https://issuer.example.com", "https://issuer2.example.com/"},
 		CacheTTL:        2 * time.Hour,
 		HTTPTimeout:     15 * time.Second,
+		AllowPrivateIPs: true,
 	}
 
 	reg, err := New(cfg)
@@ -230,7 +233,7 @@ func TestRegistry_Info(t *testing.T) {
 }
 
 func TestRegistry_SupportedResourceTypes(t *testing.T) {
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	types := reg.SupportedResourceTypes()
 
@@ -240,7 +243,7 @@ func TestRegistry_SupportedResourceTypes(t *testing.T) {
 }
 
 func TestRegistry_SupportsResolutionOnly(t *testing.T) {
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	if reg.SupportsResolutionOnly() {
 		t.Error("SupportsResolutionOnly() should return false")
@@ -248,7 +251,7 @@ func TestRegistry_SupportsResolutionOnly(t *testing.T) {
 }
 
 func TestRegistry_Healthy(t *testing.T) {
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	if !reg.Healthy() {
 		t.Error("Healthy() should return true")
@@ -266,7 +269,7 @@ func TestRegistry_Evaluate_ValidChain(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -305,7 +308,7 @@ func TestRegistry_Evaluate_SelfSignedIACA(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -335,7 +338,7 @@ func TestRegistry_Evaluate_UntrustedCert(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -366,6 +369,8 @@ func TestRegistry_Evaluate_IssuerAllowlist_Blocked(t *testing.T) {
 
 	reg, _ := New(&Config{
 		IssuerAllowlist: []string{"https://other-issuer.example.com"},
+		AllowPrivateIPs: true,
+		AllowHTTP:       true,
 	})
 
 	req := &authzen.EvaluationRequest{
@@ -403,6 +408,8 @@ func TestRegistry_Evaluate_IssuerAllowlist_Allowed(t *testing.T) {
 
 	reg, _ := New(&Config{
 		IssuerAllowlist: []string{mock.URL()},
+		AllowPrivateIPs: true,
+		AllowHTTP:       true,
 	})
 
 	req := &authzen.EvaluationRequest{
@@ -432,7 +439,7 @@ func TestRegistry_Evaluate_EmptyChain(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -462,7 +469,7 @@ func TestRegistry_Evaluate_NoMdocIacasURI(t *testing.T) {
 	mock.metadata.MdocIacasURI = ""
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -492,7 +499,7 @@ func TestRegistry_Evaluate_MetadataFetchError(t *testing.T) {
 	mock.failMetadata = true
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -522,7 +529,7 @@ func TestRegistry_Evaluate_IACFetchError(t *testing.T) {
 	mock.failIacas = true
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -551,7 +558,7 @@ func TestRegistry_Evaluate_InvalidCertBase64(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -580,7 +587,7 @@ func TestRegistry_Evaluate_NilKey(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -604,7 +611,7 @@ func TestRegistry_Evaluate_NilKey(t *testing.T) {
 }
 
 func TestRegistry_Evaluate_MissingIssuerURL(t *testing.T) {
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -644,7 +651,9 @@ func TestRegistry_Caching(t *testing.T) {
 	defer mock.Close()
 
 	reg, _ := New(&Config{
-		CacheTTL: 5 * time.Minute,
+		CacheTTL:        5 * time.Minute,
+		AllowPrivateIPs: true,
+		AllowHTTP:       true,
 	})
 
 	req := &authzen.EvaluationRequest{
@@ -685,7 +694,7 @@ func TestRegistry_Refresh_ClearsCache(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -736,7 +745,7 @@ func TestRegistry_Evaluate_MultipleIACAs(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca1, iaca2})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	req := &authzen.EvaluationRequest{
 		Subject: authzen.Subject{
@@ -778,6 +787,8 @@ func TestRegistry_Evaluate_TrailingSlashNormalization(t *testing.T) {
 	// Allowlist with trailing slash
 	reg, _ := New(&Config{
 		IssuerAllowlist: []string{mock.URL() + "/"},
+		AllowPrivateIPs: true,
+		AllowHTTP:       true,
 	})
 
 	// Request without trailing slash
@@ -808,7 +819,7 @@ func TestRegistry_Evaluate_NonStringElementInChain(t *testing.T) {
 	mock := newMockIssuerServer(t, []*x509.Certificate{iaca})
 	defer mock.Close()
 
-	reg, _ := New(nil)
+	reg, _ := New(&Config{AllowPrivateIPs: true, AllowHTTP: true})
 
 	// Include a non-string element in the chain
 	req := &authzen.EvaluationRequest{
