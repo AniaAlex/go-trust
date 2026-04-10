@@ -319,7 +319,7 @@ func (r *OIDFedRegistry) SupportsResolutionOnly() bool {
 
 // extractConstraintsFromContext extracts OIDF-specific constraints from request context.
 // Returns merged constraints from both registry defaults and request context.
-func (r *OIDFedRegistry) extractConstraintsFromContext(req *authzen.EvaluationRequest) (trustMarks, entityTypes []string, includeTrustChain, includeCerts bool, maxDepth int) {
+func (r *OIDFedRegistry) extractConstraintsFromContext(req *authzen.EvaluationRequest) (trustMarks, entityTypes, credentialTypes []string, includeTrustChain, includeCerts bool, maxDepth int) {
 	// Start with registry defaults
 	trustMarks = append([]string{}, r.requiredTrustMarks...)
 	entityTypes = append([]string{}, r.entityTypes...)
@@ -376,7 +376,73 @@ func (r *OIDFedRegistry) extractConstraintsFromContext(req *authzen.EvaluationRe
 		maxDepth = int(v)
 	}
 
+	// Extract credential_types from request context
+	if reqCredentialTypes, ok := req.Context[ContextKeyCredentialTypes]; ok {
+		switch v := reqCredentialTypes.(type) {
+		case []string:
+			credentialTypes = v
+		case []interface{}:
+			for _, ct := range v {
+				if ctStr, ok := ct.(string); ok {
+					credentialTypes = append(credentialTypes, ctStr)
+				}
+			}
+		}
+	}
+
+	// If credential_types are specified and we have a mapping, derive additional trust marks
+	if len(credentialTypes) > 0 {
+		ctTrustMarks := extractCredentialTypeTrustMarks(req.Context)
+		if len(ctTrustMarks) > 0 {
+			for _, ct := range credentialTypes {
+				if tms, ok := ctTrustMarks[ct]; ok {
+					trustMarks = mergeStringSlices(trustMarks, tms)
+				}
+			}
+		}
+	}
+
 	return
+}
+
+// extractCredentialTypeTrustMarks extracts the VCT→trust mark mapping from context.
+func extractCredentialTypeTrustMarks(ctx map[string]interface{}) map[string][]string {
+	if ctx == nil {
+		return nil
+	}
+	v, ok := ctx[ContextKeyCredentialTypeTrustMarks]
+	if !ok {
+		return nil
+	}
+
+	// Handle map[string][]string directly
+	if m, ok := v.(map[string][]string); ok {
+		return m
+	}
+
+	// Handle JSON-unmarshaled map[string]interface{}
+	if m, ok := v.(map[string]interface{}); ok {
+		result := make(map[string][]string)
+		for k, val := range m {
+			switch tms := val.(type) {
+			case []string:
+				result[k] = tms
+			case []interface{}:
+				strs := make([]string, 0, len(tms))
+				for _, tm := range tms {
+					if s, ok := tm.(string); ok {
+						strs = append(strs, s)
+					}
+				}
+				if len(strs) > 0 {
+					result[k] = strs
+				}
+			}
+		}
+		return result
+	}
+
+	return nil
 }
 
 // shouldBypassCache checks if the request wants to bypass cache.
@@ -403,6 +469,7 @@ func (r *OIDFedRegistry) shouldBypassCache(req *authzen.EvaluationRequest) bool 
 // - include_certificates: Include X.509 certificates in response
 // - max_chain_depth: Limit trust chain resolution depth
 // - cache_control: Control caching behavior
+// - credential_types: Credential type identifiers for audit/filtering
 func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRequest) (*authzen.EvaluationResponse, error) {
 	// Extract entity ID from the request
 	entityID, err := r.extractEntityID(req)
@@ -419,7 +486,7 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 	}
 
 	// Extract constraints from request context
-	trustMarks, entityTypes, includeTrustChain, includeCerts, _ := r.extractConstraintsFromContext(req)
+	trustMarks, entityTypes, credentialTypes, includeTrustChain, includeCerts, _ := r.extractConstraintsFromContext(req)
 	bypassCache := r.shouldBypassCache(req)
 
 	// Check cache first (unless bypassed)
@@ -469,15 +536,21 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 	// Check required trust marks
 	if len(trustMarks) > 0 {
 		if !r.checkTrustMarksWithList(chain, trustMarks) {
+			reason := map[string]interface{}{
+				"message":              "required trust marks not present",
+				"entity_id":            entityID,
+				"required_trust_marks": trustMarks,
+				"present_trust_marks":  r.getPresentTrustMarks(chain),
+			}
+			// Include credential_types if they contributed to the trust mark requirements
+			if len(credentialTypes) > 0 {
+				reason["requested_credential_types"] = credentialTypes
+				reason["credential_type_validation"] = "trust marks derived from credential_types are missing"
+			}
 			return &authzen.EvaluationResponse{
 				Decision: false,
 				Context: &authzen.EvaluationResponseContext{
-					Reason: map[string]interface{}{
-						"message":              "required trust marks not present",
-						"entity_id":            entityID,
-						"required_trust_marks": trustMarks,
-						"present_trust_marks":  r.getPresentTrustMarks(chain),
-					},
+					Reason: reason,
 				},
 			}, nil
 		}
@@ -488,16 +561,24 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 
 	// Check if this is a resolution-only request
 	if req.IsResolutionOnlyRequest() {
+		reason := map[string]interface{}{
+			"message":            "resolution successful",
+			"entity_id":          entityID,
+			"resolution_only":    true,
+			"trust_chain_length": len(chain),
+			"trust_anchor":       r.getTrustAnchorID(chain),
+		}
+		if len(credentialTypes) > 0 {
+			reason["requested_credential_types"] = credentialTypes
+			// Check if credential_type validation was performed
+			if ctTrustMarks := extractCredentialTypeTrustMarks(req.Context); len(ctTrustMarks) > 0 {
+				reason["credential_type_validation"] = "validated"
+			}
+		}
 		return &authzen.EvaluationResponse{
 			Decision: true,
 			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"message":            "resolution successful",
-					"entity_id":          entityID,
-					"resolution_only":    true,
-					"trust_chain_length": len(chain),
-					"trust_anchor":       r.getTrustAnchorID(chain),
-				},
+				Reason:        reason,
 				TrustMetadata: trustMetadata,
 			},
 		}, nil
@@ -539,6 +620,13 @@ func (r *OIDFedRegistry) Evaluate(ctx context.Context, req *authzen.EvaluationRe
 		"trust_chain_length": len(chain),
 		"trust_anchor":       r.getTrustAnchorID(chain),
 		"key_binding":        matchDetails,
+	}
+	if len(credentialTypes) > 0 {
+		reasonData["requested_credential_types"] = credentialTypes
+		// Check if credential_type validation was performed
+		if ctTrustMarks := extractCredentialTypeTrustMarks(req.Context); len(ctTrustMarks) > 0 {
+			reasonData["credential_type_validation"] = "validated"
+		}
 	}
 
 	return &authzen.EvaluationResponse{

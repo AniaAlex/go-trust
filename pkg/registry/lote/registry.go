@@ -152,27 +152,34 @@ func (r *Registry) Evaluate(_ context.Context, req *authzen.EvaluationRequest) (
 
 	subjectID := req.Subject.ID
 
+	// Extract credential_types early for inclusion in all responses (audit).
+	credentialTypes := extractCredentialTypes(req)
+
 	// Look up entity by subject ID.
 	ent, ok := r.index.byID[subjectID]
 	if !ok {
+		reason := map[string]interface{}{
+			"admin": fmt.Sprintf("entity %q not found in any LoTE", subjectID),
+		}
+		addCredentialTypesToReason(reason, credentialTypes)
 		return &authzen.EvaluationResponse{
 			Decision: false,
 			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"admin": fmt.Sprintf("entity %q not found in any LoTE", subjectID),
-				},
+				Reason: reason,
 			},
 		}, nil
 	}
 
 	// Check entity status.
 	if ent.entity.EntityStatus != "" && ent.entity.EntityStatus != etsi119602.StatusGranted {
+		reason := map[string]interface{}{
+			"admin": fmt.Sprintf("entity %q has status %q", subjectID, ent.entity.EntityStatus),
+		}
+		addCredentialTypesToReason(reason, credentialTypes)
 		return &authzen.EvaluationResponse{
 			Decision: false,
 			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"admin": fmt.Sprintf("entity %q has status %q", subjectID, ent.entity.EntityStatus),
-				},
+				Reason: reason,
 			},
 		}, nil
 	}
@@ -193,38 +200,35 @@ func (r *Registry) Evaluate(_ context.Context, req *authzen.EvaluationRequest) (
 	// For jwk: direct key match only.
 	keyHash, err := hashResourceKey(req, r.config.CryptoExt)
 	if err != nil {
+		reason := map[string]interface{}{"admin": fmt.Sprintf("failed to hash resource key: %v", err)}
+		addCredentialTypesToReason(reason, credentialTypes)
 		return &authzen.EvaluationResponse{
 			Decision: false,
 			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{"admin": fmt.Sprintf("failed to hash resource key: %v", err)},
+				Reason: reason,
 			},
 		}, nil
 	}
 
 	if ent.keyHashes[keyHash] {
-		return &authzen.EvaluationResponse{
-			Decision: true,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"admin": fmt.Sprintf("key matches entity %q in LoTE (territory: %s)", subjectID, ent.territory),
-				},
-			},
-		}, nil
+		return r.buildSuccessResponse(subjectID, ent.territory, "key matches entity", credentialTypes), nil
 	}
 
 	// For x5c: attempt PKIX path validation if the entity has X.509 trust anchors.
 	if req.Resource.Type == "x5c" && ent.certPool != nil {
-		if resp := r.validateX5CChain(req, ent); resp != nil {
+		if resp := r.validateX5CChain(req, ent, credentialTypes); resp != nil {
 			return resp, nil
 		}
 	}
 
+	reason := map[string]interface{}{
+		"admin": fmt.Sprintf("key does not match any digital identity of entity %q", subjectID),
+	}
+	addCredentialTypesToReason(reason, credentialTypes)
 	return &authzen.EvaluationResponse{
 		Decision: false,
 		Context: &authzen.EvaluationResponseContext{
-			Reason: map[string]interface{}{
-				"admin": fmt.Sprintf("key does not match any digital identity of entity %q", subjectID),
-			},
+			Reason: reason,
 		},
 	}, nil
 }
@@ -261,10 +265,62 @@ func (r *Registry) Refresh(ctx context.Context) error {
 	return r.refresh()
 }
 
+// buildSuccessResponse creates a successful EvaluationResponse with credential_types
+// from the request context included for audit purposes.
+func (r *Registry) buildSuccessResponse(subjectID, territory, detail string, credentialTypes []string) *authzen.EvaluationResponse {
+	reason := map[string]interface{}{
+		"admin": fmt.Sprintf("%s %q in LoTE (territory: %s)", detail, subjectID, territory),
+	}
+	addCredentialTypesToReason(reason, credentialTypes)
+
+	return &authzen.EvaluationResponse{
+		Decision: true,
+		Context: &authzen.EvaluationResponseContext{
+			Reason: reason,
+		},
+	}
+}
+
+// extractCredentialTypes extracts credential_types from the request context.
+func extractCredentialTypes(req *authzen.EvaluationRequest) []string {
+	if req.Context == nil {
+		return nil
+	}
+	return extractStringSlice(req.Context, "credential_types")
+}
+
+// addCredentialTypesToReason adds credential_types to a reason map if present.
+func addCredentialTypesToReason(reason map[string]interface{}, credTypes []string) {
+	if len(credTypes) > 0 {
+		reason["requested_credential_types"] = credTypes
+	}
+}
+
+// extractStringSlice extracts a []string from a context map value.
+func extractStringSlice(ctx map[string]interface{}, key string) []string {
+	v, ok := ctx[key]
+	if !ok {
+		return nil
+	}
+	switch s := v.(type) {
+	case []string:
+		return s
+	case []interface{}:
+		result := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
 // validateX5CChain attempts PKIX path validation of the x5c certificate chain
 // against the entity's X.509 trust anchors. Returns a positive response if
 // validation succeeds, nil if it fails (allowing the caller to fall through).
-func (r *Registry) validateX5CChain(req *authzen.EvaluationRequest, ent *indexedEntity) *authzen.EvaluationResponse {
+func (r *Registry) validateX5CChain(req *authzen.EvaluationRequest, ent *indexedEntity, credentialTypes []string) *authzen.EvaluationResponse {
 	certs, err := parseX5CCerts(req, r.config.CryptoExt)
 	if err != nil || len(certs) == 0 {
 		return nil
@@ -282,14 +338,7 @@ func (r *Registry) validateX5CChain(req *authzen.EvaluationRequest, ent *indexed
 	}
 
 	if _, err := certs[0].Verify(opts); err == nil {
-		return &authzen.EvaluationResponse{
-			Decision: true,
-			Context: &authzen.EvaluationResponseContext{
-				Reason: map[string]interface{}{
-					"admin": fmt.Sprintf("x5c chain validates against trust anchor for entity %q (territory: %s)", ent.entity.EntityID, ent.territory),
-				},
-			},
-		}
+		return r.buildSuccessResponse(ent.entity.EntityID, ent.territory, "x5c chain validates against trust anchor for entity", credentialTypes)
 	}
 	return nil
 }

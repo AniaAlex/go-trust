@@ -126,6 +126,28 @@ Environment variable: `GO_TRUST_EXTERNAL_URL` for external URL.
 }
 ```
 
+#### Action Parameters
+
+The `action.parameters` field allows clients to include role-specific constraints in the request. A common use case is specifying which credential types are being evaluated:
+
+```json
+{
+  "subject": {"type": "key", "id": "https://issuer.example.com"},
+  "resource": {"type": "x5c", "key": ["MIIC..."]},
+  "action": {
+    "name": "credential-issuer",
+    "parameters": {
+      "credential_types": ["eu.europa.ec.eudi.pid.1", "eu.europa.ec.eudi.mdl.1"]
+    }
+  }
+}
+```
+
+When `credential_types` is provided, it enables:
+- **Audit logging**: The requested credential types are included in the `requested_credential_types` field of the response reason for all supporting registries (ETSI TSL, LoTE, OpenID Federation, whitelist)
+- **Policy-based validation**: For OpenID Federation, credential types can be mapped to required trust marks via `credential_type_trust_marks` (see [Credential Type to Trust Mark Mapping](#credential-type-to-trust-mark-mapping-openid-federation))
+- **Server-side filtering**: For ETSI TSL, `credential_types` can be set in the policy constraints for server-configured audit (see [Credential Types in ETSI TSL](#credential-types-in-etsi-tsl))
+
 ### AuthZEN Evaluation Response
 
 ```json
@@ -447,11 +469,101 @@ policies:
 
 | Constraint Type | Description | Applicable Registries |
 |-----------------|-------------|----------------------|
-| `etsi` | Service types, statuses, countries | ETSI TSL |
-| `lote` | Entity types, statuses, territories | ETSI LoTE |
-| `oidfed` | Entity types, trust marks | OpenID Federation |
+| `etsi` | Service types, statuses, countries, credential types (audit) | ETSI TSL |
+| `lote` | Entity types, statuses, territories, credential types (audit) | ETSI LoTE |
+| `oidfed` | Entity types, trust marks, credential type mapping | OpenID Federation |
 | `did` | Allowed domains, verifiable history | DID Web, DID Web VH |
 | `mdociaca` | Issuer allowlist, IACA endpoint | mDOC IACA |
+
+### Credential Types in ETSI TSL
+
+For ETSI TSL, `credential_types` can be supplied by the client via `action.parameters` or set server-side in the `etsi` policy constraints. When present, they are included in the `requested_credential_types` field of every evaluation response (both allowed and denied) for audit purposes. Future versions may use them for filtering against TSL service extensions or metadata.
+
+Client-supplied via `action.parameters`:
+```json
+{
+  "action": {
+    "name": "credential-issuer",
+    "parameters": {
+      "credential_types": ["eu.europa.ec.eudi.pid.1"]
+    }
+  }
+}
+```
+
+Server-side via policy configuration:
+```yaml
+policies:
+  policies:
+    credential-issuer:
+      etsi:
+        service_types:
+          - "http://uri.etsi.org/TrstSvc/Svctype/QCert"
+        credential_types:
+          - "eu.europa.ec.eudi.pid.1"
+```
+
+### Credential Types in LoTE
+
+For ETSI LoTE (List of Trusted Entities), `credential_types` supplied via `action.parameters` are included in the `requested_credential_types` field of all evaluation responses (both allowed and denied) for audit purposes.
+
+```json
+{
+  "action": {
+    "name": "credential-issuer",
+    "parameters": {
+      "credential_types": ["eu.europa.ec.eudi.pid.1"]
+    }
+  }
+}
+```
+
+The response will include:
+```json
+{
+  "decision": true,
+  "context": {
+    "reason": {
+      "admin": "Found ...",
+      "requested_credential_types": ["eu.europa.ec.eudi.pid.1"]
+    }
+  }
+}
+```
+
+### Credential Type to Trust Mark Mapping (OpenID Federation)
+
+For OpenID Federation, you can configure a mapping from SD-JWT VCT values (credential types) to required trust marks. When a client includes `credential_types` in `action.parameters`, the policy will derive the required trust marks from the mapping:
+
+```yaml
+policies:
+  policies:
+    credential-issuer:
+      description: "Validate PID and mDL issuers"
+      oidfed:
+        entity_types:
+          - "openid_credential_issuer"
+        # Map credential types to required trust marks
+        credential_type_trust_marks:
+          "eu.europa.ec.eudi.pid.1":
+            - "https://trust.eu/tm/pid-issuer"
+          "eu.europa.ec.eudi.mdl.1":
+            - "https://trust.eu/tm/mdl-issuer"
+```
+
+When a client requests evaluation with:
+```json
+{
+  "action": {
+    "name": "credential-issuer",
+    "parameters": {
+      "credential_types": ["eu.europa.ec.eudi.pid.1"]
+    }
+  }
+}
+```
+
+The OIDF registry will require the entity to have the `https://trust.eu/tm/pid-issuer` trust mark, in addition to any statically configured `required_trust_marks`.
 
 ### Example Request
 
