@@ -36,6 +36,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,12 @@ type TSLConfig struct {
 	// CryptoExt provides extensible certificate parsing for non-standard curves
 	// (e.g. brainpool). If nil, standard x509.ParseCertificate is used.
 	CryptoExt *cryptoutil.Extensions
+
+	// RefreshInterval is how often to re-fetch TSL data. Zero disables.
+	RefreshInterval time.Duration
+
+	// Logger for structured logging. May be nil.
+	Logger *slog.Logger
 }
 
 // TSLRegistry implements TrustRegistry for ETSI TS 119 612 Trust Status Lists.
@@ -121,6 +128,8 @@ type TSLRegistry struct {
 	mu          sync.RWMutex
 	healthy     bool
 	lastError   error
+
+	stopCh chan struct{}
 }
 
 // NewTSLRegistry creates a new ETSI TSL registry.
@@ -144,6 +153,7 @@ func NewTSLRegistry(cfg TSLConfig) (*TSLRegistry, error) {
 
 	r := &TSLRegistry{
 		config: cfg,
+		stopCh: make(chan struct{}),
 	}
 
 	if err := r.load(); err != nil {
@@ -154,10 +164,10 @@ func NewTSLRegistry(cfg TSLConfig) (*TSLRegistry, error) {
 }
 
 // load reads trust data from configured sources.
+// I/O and parsing are performed without holding the lock; the lock is only
+// held briefly to swap in the new state, so Evaluate/Info/Healthy are not
+// blocked during network or file fetches.
 func (r *TSLRegistry) load() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	var pool *x509.CertPool
 	var certCount int
 	var tsls []*etsi119612.TSL
@@ -168,9 +178,9 @@ func (r *TSLRegistry) load() error {
 	if r.config.LOTLSignerBundle != "" {
 		signers, err := r.loadLOTLSignerBundle(r.config.LOTLSignerBundle)
 		if err != nil {
-			r.lastError = fmt.Errorf("failed to load LOTL signer bundle: %w", err)
-			r.healthy = false
-			return r.lastError
+			err = fmt.Errorf("failed to load LOTL signer bundle: %w", err)
+			r.setError(err)
+			return err
 		}
 		lotlSigners = signers
 	}
@@ -179,8 +189,7 @@ func (r *TSLRegistry) load() error {
 	if r.config.CertBundle != "" {
 		p, count, err := r.loadCertBundle(r.config.CertBundle)
 		if err != nil {
-			r.lastError = err
-			r.healthy = false
+			r.setError(err)
 			return err
 		}
 		pool = p
@@ -193,22 +202,20 @@ func (r *TSLRegistry) load() error {
 	for _, tslPath := range r.config.TSLFiles {
 		// Reject network URLs in TSLFiles
 		if strings.HasPrefix(tslPath, "http://") || strings.HasPrefix(tslPath, "https://") {
-			r.lastError = fmt.Errorf("network URLs not allowed in TSLFiles: %s", tslPath)
-			r.healthy = false
-			return r.lastError
+			err := fmt.Errorf("network URLs not allowed in TSLFiles: %s", tslPath)
+			r.setError(err)
+			return err
 		}
 
 		tsl, certs, err := r.loadLocalTSL(tslPath)
 		if err != nil {
-			r.lastError = err
-			r.healthy = false
+			r.setError(err)
 			return err
 		}
 
 		// Verify TSL signature if LOTL signers are configured
 		if err := r.verifyTSLSignature(tsl, lotlSigners); err != nil {
-			r.lastError = err
-			r.healthy = false
+			r.setError(err)
 			return err
 		}
 
@@ -230,24 +237,22 @@ func (r *TSLRegistry) load() error {
 		// Check if network access is allowed
 		if !r.config.AllowNetworkAccess {
 			if strings.HasPrefix(tslURL, "http://") || strings.HasPrefix(tslURL, "https://") {
-				r.lastError = fmt.Errorf("network URL not allowed (AllowNetworkAccess=false): %s", tslURL)
-				r.healthy = false
-				return r.lastError
+				err := fmt.Errorf("network URL not allowed (AllowNetworkAccess=false): %s", tslURL)
+				r.setError(err)
+				return err
 			}
 		}
 
 		loadedTSLs, certs, err := r.loadTSLFromURL(tslURL)
 		if err != nil {
-			r.lastError = err
-			r.healthy = false
+			r.setError(err)
 			return err
 		}
 
 		// Verify TSL signatures if LOTL signers are configured
 		for _, tsl := range loadedTSLs {
 			if err := r.verifyTSLSignature(tsl, lotlSigners); err != nil {
-				r.lastError = err
-				r.healthy = false
+				r.setError(err)
 				return err
 			}
 		}
@@ -266,11 +271,13 @@ func (r *TSLRegistry) load() error {
 
 	// Verify we have some trust data
 	if pool == nil || certCount == 0 {
-		r.lastError = fmt.Errorf("no trust data loaded")
-		r.healthy = false
-		return fmt.Errorf("no trust data loaded - configure CertBundle, TSLFiles, or TSLURLs")
+		err := fmt.Errorf("no trust data loaded - configure CertBundle, TSLFiles, or TSLURLs")
+		r.setError(err)
+		return err
 	}
 
+	// Swap in new state under the lock
+	r.mu.Lock()
 	r.certPool = pool
 	r.certCount = certCount
 	r.tsls = tsls
@@ -279,8 +286,17 @@ func (r *TSLRegistry) load() error {
 	r.loadedAt = time.Now()
 	r.healthy = true
 	r.lastError = nil
+	r.mu.Unlock()
 
 	return nil
+}
+
+// setError records a load failure under the lock.
+func (r *TSLRegistry) setError(err error) {
+	r.mu.Lock()
+	r.lastError = err
+	r.healthy = false
+	r.mu.Unlock()
 }
 
 // loadCertBundle reads certificates from a PEM file.
@@ -958,13 +974,18 @@ func (r *TSLRegistry) Info() registry.RegistryInfo {
 		trustAnchors = append(trustAnchors, r.sourceFiles...)
 	}
 
-	return registry.RegistryInfo{
+	info := registry.RegistryInfo{
 		Name:         r.config.Name,
 		Type:         "etsi_tsl",
 		Description:  r.config.Description,
 		Version:      "1.0.0",
 		TrustAnchors: trustAnchors,
 	}
+	if !r.loadedAt.IsZero() {
+		loadedAt := r.loadedAt
+		info.LastUpdated = &loadedAt
+	}
+	return info
 }
 
 // Healthy returns true if the registry has loaded trust data successfully.
@@ -977,6 +998,45 @@ func (r *TSLRegistry) Healthy() bool {
 // Refresh reloads trust data from the configured sources.
 func (r *TSLRegistry) Refresh(ctx context.Context) error {
 	return r.load()
+}
+
+// StartRefreshLoop starts a background goroutine that periodically re-fetches
+// TSL data. Must be called after NewTSLRegistry.
+func (r *TSLRegistry) StartRefreshLoop(ctx context.Context) error {
+	interval := r.config.RefreshInterval
+	if interval == 0 {
+		return nil // disabled
+	}
+	if interval < 0 {
+		return fmt.Errorf("RefreshInterval must be positive, got %v", interval)
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := r.load(); err != nil && r.config.Logger != nil {
+					r.config.Logger.Warn("TSL refresh failed", slog.String("error", err.Error()))
+				}
+			case <-r.stopCh:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+// Stop halts the background refresh loop.
+func (r *TSLRegistry) Stop() {
+	select {
+	case <-r.stopCh:
+	default:
+		close(r.stopCh)
+	}
 }
 
 // CertificateCount returns the number of trusted certificates loaded.
