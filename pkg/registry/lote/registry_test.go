@@ -1114,3 +1114,194 @@ func TestBuildIndex_ImplicitTrust(t *testing.T) {
 	// Service key should be indexed
 	assert.NotEmpty(t, idx.byKeyHash, "service keys should be indexed when ServiceStatus is absent")
 }
+
+// TestEvaluate_PubEAA_NotifiedService verifies that Pub-EAA entities with
+// a "notified" service status are trusted.
+func TestEvaluate_PubEAA_NotifiedService(t *testing.T) {
+	lote := &etsi119602.ListOfTrustedEntities{
+		ListAndSchemeInformation: etsi119602.ListAndSchemeInformation{
+			LoTEVersionIdentifier: 1,
+			LoTEType:              etsi119602.LoTETypePubEAAProviders, // Pub-EAA profile
+			SchemeTerritory:       "SE",
+			SchemeOperatorName:    etsi119602.NameSet{{Lang: "en", Value: "Test"}},
+			ListIssueDateTime:     "2026-01-01T00:00:00Z",
+			NextUpdate:            "2027-01-01T00:00:00Z",
+		},
+		TrustedEntitiesList: []etsi119602.TrustedEntity{
+			{
+				TrustedEntityInformation: etsi119602.TrustedEntityInformation{
+					TEName:           etsi119602.NameSet{{Lang: "en", Value: "Pub-EAA Provider"}},
+					TEInformationURI: []etsi119602.NonEmptyMultiLangURI{{Lang: "en", URIValue: "https://pubeaa-notified.example.com"}},
+				},
+				TrustedEntityServices: []etsi119602.TrustedEntityService{
+					{
+						ServiceInformation: etsi119602.ServiceInformation{
+							ServiceName:           etsi119602.NameSet{{Lang: "en", Value: "PubEAA Issuance"}},
+							ServiceTypeIdentifier: "http://uri.etsi.org/19602/SvcType/PubEAA/Issuance",
+							ServiceStatus:         "http://uri.etsi.org/19602/PubEAAProvidersList/SvcStatus/notified",
+							ServiceDigitalIdentity: etsi119602.ServiceDigitalIdentity{
+								PublicKeyValues: []map[string]any{
+									{"kty": "EC", "crv": "P-256", "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU", "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	path := writeLoTE(t, dir, "lote.json", lote)
+	reg, err := New(Config{Sources: []string{path}})
+	require.NoError(t, err)
+
+	// Resolution-only should succeed for notified Pub-EAA entity
+	resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+		Subject:  authzen.Subject{Type: "key", ID: "https://pubeaa-notified.example.com"},
+		Resource: authzen.Resource{ID: "https://pubeaa-notified.example.com"},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Decision, "Pub-EAA entity with notified service should be trusted")
+}
+
+// TestEvaluate_PubEAA_NoNotifiedService verifies that Pub-EAA entities without
+// any "notified" service status are NOT trusted (per ETSI TS 119 602 Annex H).
+func TestEvaluate_PubEAA_NoNotifiedService(t *testing.T) {
+	lote := &etsi119602.ListOfTrustedEntities{
+		ListAndSchemeInformation: etsi119602.ListAndSchemeInformation{
+			LoTEVersionIdentifier: 1,
+			LoTEType:              etsi119602.LoTETypePubEAAProviders, // Pub-EAA profile
+			SchemeTerritory:       "SE",
+			SchemeOperatorName:    etsi119602.NameSet{{Lang: "en", Value: "Test"}},
+			ListIssueDateTime:     "2026-01-01T00:00:00Z",
+			NextUpdate:            "2027-01-01T00:00:00Z",
+		},
+		TrustedEntitiesList: []etsi119602.TrustedEntity{
+			{
+				TrustedEntityInformation: etsi119602.TrustedEntityInformation{
+					TEName:           etsi119602.NameSet{{Lang: "en", Value: "Pub-EAA Provider No Status"}},
+					TEInformationURI: []etsi119602.NonEmptyMultiLangURI{{Lang: "en", URIValue: "https://pubeaa-nostatus.example.com"}},
+				},
+				TrustedEntityServices: []etsi119602.TrustedEntityService{
+					{
+						ServiceInformation: etsi119602.ServiceInformation{
+							ServiceName:           etsi119602.NameSet{{Lang: "en", Value: "PubEAA Issuance"}},
+							ServiceTypeIdentifier: "http://uri.etsi.org/19602/SvcType/PubEAA/Issuance",
+							// ServiceStatus intentionally absent - per Annex H this should NOT be trusted
+							ServiceDigitalIdentity: etsi119602.ServiceDigitalIdentity{
+								PublicKeyValues: []map[string]any{
+									{"kty": "EC", "crv": "P-256", "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU", "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	path := writeLoTE(t, dir, "lote.json", lote)
+	reg, err := New(Config{Sources: []string{path}})
+	require.NoError(t, err)
+
+	// Resolution-only should FAIL for Pub-EAA entity without notified status
+	resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+		Subject:  authzen.Subject{Type: "key", ID: "https://pubeaa-nostatus.example.com"},
+		Resource: authzen.Resource{ID: "https://pubeaa-nostatus.example.com"},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Decision, "Pub-EAA entity without notified service should NOT be trusted")
+	assert.Contains(t, resp.Context.Reason["admin"], "no service with 'notified' status")
+}
+
+// TestEvaluate_PubEAA_WithdrawnOnlyService verifies that Pub-EAA entities with
+// only withdrawn services are NOT trusted.
+func TestEvaluate_PubEAA_WithdrawnOnlyService(t *testing.T) {
+	lote := &etsi119602.ListOfTrustedEntities{
+		ListAndSchemeInformation: etsi119602.ListAndSchemeInformation{
+			LoTEVersionIdentifier: 1,
+			LoTEType:              etsi119602.LoTETypePubEAAProviders, // Pub-EAA profile
+			SchemeTerritory:       "SE",
+			SchemeOperatorName:    etsi119602.NameSet{{Lang: "en", Value: "Test"}},
+			ListIssueDateTime:     "2026-01-01T00:00:00Z",
+			NextUpdate:            "2027-01-01T00:00:00Z",
+		},
+		TrustedEntitiesList: []etsi119602.TrustedEntity{
+			{
+				TrustedEntityInformation: etsi119602.TrustedEntityInformation{
+					TEName:           etsi119602.NameSet{{Lang: "en", Value: "Pub-EAA Provider Withdrawn"}},
+					TEInformationURI: []etsi119602.NonEmptyMultiLangURI{{Lang: "en", URIValue: "https://pubeaa-withdrawn.example.com"}},
+				},
+				TrustedEntityServices: []etsi119602.TrustedEntityService{
+					{
+						ServiceInformation: etsi119602.ServiceInformation{
+							ServiceName:           etsi119602.NameSet{{Lang: "en", Value: "PubEAA Issuance"}},
+							ServiceTypeIdentifier: "http://uri.etsi.org/19602/SvcType/PubEAA/Issuance",
+							ServiceStatus:         "http://uri.etsi.org/19602/PubEAAProvidersList/SvcStatus/withdrawn",
+							ServiceDigitalIdentity: etsi119602.ServiceDigitalIdentity{
+								PublicKeyValues: []map[string]any{
+									{"kty": "EC", "crv": "P-256", "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU", "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	path := writeLoTE(t, dir, "lote.json", lote)
+	reg, err := New(Config{Sources: []string{path}})
+	require.NoError(t, err)
+
+	// Resolution-only should FAIL for Pub-EAA entity with only withdrawn services
+	resp, err := reg.Evaluate(context.Background(), &authzen.EvaluationRequest{
+		Subject:  authzen.Subject{Type: "key", ID: "https://pubeaa-withdrawn.example.com"},
+		Resource: authzen.Resource{ID: "https://pubeaa-withdrawn.example.com"},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Decision, "Pub-EAA entity with only withdrawn service should NOT be trusted")
+}
+
+func TestHasNotifiedService(t *testing.T) {
+	// Entity with notified service
+	entNotified := etsi119602.TrustedEntity{
+		TrustedEntityServices: []etsi119602.TrustedEntityService{
+			{
+				ServiceInformation: etsi119602.ServiceInformation{
+					ServiceStatus: "http://uri.etsi.org/19602/PubEAAProvidersList/SvcStatus/notified",
+				},
+			},
+		},
+	}
+	assert.True(t, hasNotifiedService(entNotified), "should detect notified service")
+
+	// Entity with withdrawn service only
+	entWithdrawn := etsi119602.TrustedEntity{
+		TrustedEntityServices: []etsi119602.TrustedEntityService{
+			{
+				ServiceInformation: etsi119602.ServiceInformation{
+					ServiceStatus: "http://uri.etsi.org/19602/PubEAAProvidersList/SvcStatus/withdrawn",
+				},
+			},
+		},
+	}
+	assert.False(t, hasNotifiedService(entWithdrawn), "should not detect withdrawn as notified")
+
+	// Entity with no status
+	entNoStatus := etsi119602.TrustedEntity{
+		TrustedEntityServices: []etsi119602.TrustedEntityService{
+			{
+				ServiceInformation: etsi119602.ServiceInformation{},
+			},
+		},
+	}
+	assert.False(t, hasNotifiedService(entNoStatus), "should not detect empty status as notified")
+
+	// Entity with no services
+	entNoServices := etsi119602.TrustedEntity{}
+	assert.False(t, hasNotifiedService(entNoServices), "should not detect notified with no services")
+}

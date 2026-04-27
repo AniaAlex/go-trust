@@ -81,13 +81,28 @@ type entityIndex struct {
 
 // indexedEntity holds a single entity and its precomputed key hashes.
 type indexedEntity struct {
-	entity    etsi119602.TrustedEntity
-	entityID  string
-	territory string
-	keyHashes map[string]bool // SHA-256 fingerprints of all digital identities
+	entity     etsi119602.TrustedEntity
+	entityID   string
+	territory  string
+	schemeType string          // LoTE schemeType URI (determines status checking behavior)
+	keyHashes  map[string]bool // SHA-256 fingerprints of all digital identities
 	// certPool contains X.509 certificates from this entity's digital identities,
 	// used as trust anchors for PKIX path validation of x5c requests.
 	certPool *x509.CertPool
+}
+
+// Pub-EAA service status URI for "notified" (trusted) status.
+const pubEAAStatusNotified = "http://uri.etsi.org/19602/PubEAAProvidersList/SvcStatus/notified"
+
+// hasNotifiedService checks if a Pub-EAA entity has at least one service with "notified" status.
+// Per ETSI TS 119 602 Annex H, Pub-EAA services must have explicit ServiceStatus.
+func hasNotifiedService(entity etsi119602.TrustedEntity) bool {
+	for _, svc := range entity.TrustedEntityServices {
+		if svc.ServiceInformation.ServiceStatus == pubEAAStatusNotified {
+			return true
+		}
+	}
+	return false
 }
 
 var _ registry.TrustRegistry = (*Registry)(nil)
@@ -182,8 +197,26 @@ func (r *Registry) Evaluate(_ context.Context, req *authzen.EvaluationRequest) (
 		}, nil
 	}
 
-	// Per ETSI TS 119 602-1: presence in the list = trusted (no entity-level status).
-	// Withdrawn services are excluded during indexing.
+	// Check trust status based on LoTE profile type (ETSI TS 119 602 compliance).
+	// - Pub-EAA (Annex H): ServiceStatus is mandatory, check at service level
+	// - All other profiles (PID, Wallet, WRPAC, WRPRC, Registrars): presence in list = trusted
+	// Withdrawn services are excluded during indexing for all profiles.
+	if etsi119602.IsPubEAASchemeType(ent.schemeType) {
+		// Pub-EAA requires explicit service status check
+		if !hasNotifiedService(ent.entity) {
+			reason := map[string]interface{}{
+				"admin": fmt.Sprintf("entity %q has no service with 'notified' status", subjectID),
+			}
+			addCredentialTypesToReason(reason, credentialTypes)
+			return &authzen.EvaluationResponse{
+				Decision: false,
+				Context: &authzen.EvaluationResponseContext{
+					Reason: reason,
+				},
+			}, nil
+		}
+	}
+	// For non-Pub-EAA profiles: presence in list means trusted (no status check needed)
 
 	// Resolution-only: no key check needed.
 	if req.IsResolutionOnlyRequest() {
@@ -426,13 +459,15 @@ func buildIndex(lotes []*etsi119602.ListOfTrustedEntities, ext *cryptoutil.Exten
 
 	for _, lote := range lotes {
 		territory := lote.ListAndSchemeInformation.SchemeTerritory
+		schemeType := lote.ListAndSchemeInformation.LoTEType
 		for _, ent := range lote.TrustedEntitiesList {
 			id := entityID(ent)
 			ie := &indexedEntity{
-				entity:    ent,
-				entityID:  id,
-				territory: territory,
-				keyHashes: make(map[string]bool),
+				entity:     ent,
+				entityID:   id,
+				territory:  territory,
+				schemeType: schemeType,
+				keyHashes:  make(map[string]bool),
 			}
 
 			// Index service digital identities; skip withdrawn services.
